@@ -30,6 +30,16 @@ import {
   connectFirestoreEmulator
 } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js';
 
+// § Postpass migration dev environment — true only when served from
+// touchout.org/tmapdev/, the throwaway clone this migration is being
+// built and tested in (see tmapdev.md). Everything derived from this
+// (storage keys, buildId) needs zero manual reversion when the finished
+// work is merged back into the real tmap repo -- tmap's own deployment
+// is never served from /tmapdev/, so this is always false there, and
+// this whole file can stay byte-for-byte identical between the two
+// repos except for the actual migration changes.
+const IS_DEV_BUILD = location.pathname.startsWith('/tmapdev/');
+
 // Data sources — see README.md § Data sources. Geocoding (address -> coordinates)
 // is now Google's Geocoder (google.maps.Geocoder) instead of Nominatim, to
 // evaluate whether it's more reliable for POI/business-name searches; street
@@ -40,7 +50,11 @@ const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 // logOverpassQuery) can be correlated with which version of the app
 // produced them, e.g. to check whether a later change to fetchWays
 // actually improved reliability. Free-form string, not machine-parsed.
-const BUILD_ID = '2026-07-29';
+// The tmapdev- prefix (see IS_DEV_BUILD above) keeps this migration's own
+// test traffic self-evidently separate from real production rows in
+// overpassLogs, without anyone needing to remember which dates were dev
+// builds.
+const BUILD_ID = (IS_DEV_BUILD ? 'tmapdev-' : '') + '2026-07-29';
 
 // Client-side Maps Platform key: not secret -- protected by the API
 // restriction (Maps JavaScript API + Places API only) and the website
@@ -305,6 +319,7 @@ const CURSOR_HIT_RADIUS = 2;
 const POI_MARKER_DOTS = 3;
 
 const browserWarning = document.getElementById('browser-warning');
+const devBuildBanner = document.getElementById('dev-build-banner');
 const devCacheBanner = document.getElementById('dev-cache-banner');
 const devEmulatorBanner = document.getElementById('dev-emulator-banner');
 const searchForm = document.getElementById('search-form');
@@ -453,7 +468,9 @@ let labelZones = { top: false, bottom: false, left: false, right: false };
 // do nothing (it'd load correctly, then get overwritten the instant a
 // search happens) and risk looking like a broken feature rather than no
 // feature at all.
-const SETTINGS_STORAGE_KEY = 'dottmap-settings';
+// -dev suffix on tmapdev (see IS_DEV_BUILD) so this never collides with
+// production's own settings on the shared touchout.org origin.
+const SETTINGS_STORAGE_KEY = 'dottmap-settings' + (IS_DEV_BUILD ? '-dev' : '');
 
 // Reads and validates persisted settings, applying only fields that pass
 // a sanity check against the actual set of valid values -- localStorage
@@ -678,7 +695,9 @@ function captureCurrentMap() {
 // doesn't lose an in-progress map. Follows the same try/catch-swallowed,
 // field-validated convention as loadPersistedSettings/savePersistedSettings
 // above.
-const CURRENT_MAP_STORAGE_KEY = 'dottmap-current-map';
+// -dev suffix on tmapdev (see IS_DEV_BUILD), same reasoning as
+// SETTINGS_STORAGE_KEY above.
+const CURRENT_MAP_STORAGE_KEY = 'dottmap-current-map' + (IS_DEV_BUILD ? '-dev' : '');
 
 function saveCurrentMapLocally() {
   if (!hasAnchor) return;
@@ -716,7 +735,11 @@ function loadPersistedCurrentMap() {
 // Saved Maps entries never read this -- see loadMapRecord's cachedWays
 // parameter -- so this can never show stale data anywhere except the
 // exact map already on screen when the page reloads.
-const WAYS_CACHE_DB_NAME = 'dottmap-ways-cache';
+// -dev suffix on tmapdev (see IS_DEV_BUILD), same reasoning as
+// SETTINGS_STORAGE_KEY/CURRENT_MAP_STORAGE_KEY above -- a distinct
+// IndexedDB database, not just a distinct object store, so the two
+// sites' cached ways can never cross-contaminate.
+const WAYS_CACHE_DB_NAME = 'dottmap-ways-cache' + (IS_DEV_BUILD ? '-dev' : '');
 const WAYS_CACHE_STORE = 'currentMapWays';
 const WAYS_CACHE_KEY = 'current';
 
@@ -782,6 +805,14 @@ if (!isChrome()) {
 // calling focus() explicitly is the standard, more robust fix for exactly
 // this kind of autofocus flakiness across browsers/tab states.
 btnConnect.focus();
+
+// § Postpass migration dev environment — unconditional, unlike the two
+// banners below (which are gated on a flag someone could forget to flip
+// back): this one just reflects which site is actually being served, so
+// there's nothing to forget.
+if (IS_DEV_BUILD) {
+  devBuildBanner.hidden = false;
+}
 
 // § Local test data cache — unmissable visual flag (not just a code
 // comment) that this build is serving cached data instead of hitting the
