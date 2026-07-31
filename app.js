@@ -2678,13 +2678,22 @@ function announcePositionRelativeToAnchor() {
 class OsmFetchError extends Error {
   constructor(kind, status) {
     super(`osm-fetch-error:${kind}`);
-    this.kind = kind; // 'network' | 'rate-limited' | 'timeout' | 'server-error'
+    this.kind = kind; // 'network' | 'rate-limited' | 'timeout' | 'server-error' | 'malformed'
     this.status = status;
   }
 }
 
 // Maps an HTTP status from a non-ok response to an OsmFetchError kind.
+// 'malformed' (added for the Postpass retry loop, see fetchFromPostpassWithRetry
+// below) means the request itself was invalid -- confirmed 2026-07-31 by
+// deliberately sending a bad query to Postpass: HTTP 400, plain-text
+// PostgreSQL error body. Since our own query is always valid SQL we
+// build ourselves, a 400 here would mean a bug in that code, not
+// something real-world bbox/location variation could ever trigger --
+// which is exactly why it's treated as non-retryable rather than
+// bucketed with the genuinely transient kinds below.
 function classifyHttpFailure(status) {
+  if (status === 400) return 'malformed';
   if (status === 429) return 'rate-limited';
   if (status === 504) return 'timeout';
   return 'server-error';
@@ -2701,6 +2710,7 @@ const OSM_ERROR_MESSAGES = {
     network: "Couldn't reach OpenStreetMap to fetch street data — check your internet connection and try again.",
     'rate-limited': "OpenStreetMap's street-data service is rate-limiting requests right now. Wait a moment and try again.",
     timeout: 'The street-data query took too long for this area. Try again, or try a smaller search area.',
+    malformed: 'The street-data request itself was rejected as invalid. This points to a bug in the app rather than something retrying will fix — please file an issue.',
     'server-error': (status) => `OpenStreetMap's street-data service returned an unexpected error${status ? ` (status ${status})` : ''}. Try again in a moment.`
   }
 };
@@ -3003,14 +3013,21 @@ function formatDistance(distFt) {
 // side channel" principle as the rest of the app applies to its actual
 // features. country/errorType are whatever the caller has on hand -- null
 // is a valid, expected value for both (see call sites), not a bug.
-function logOverpassQuery({ elapsedMs, errorType, country }) {
+// dataSource/attempt/requestId (spec §4.6) default to plain Overpass
+// values so fetchWays()'s existing single-attempt Overpass call sites
+// don't need editing to get a consistent schema -- only
+// fetchFromPostpassWithRetry below passes them explicitly.
+function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpass', attempt = 1, requestId = null }) {
   addDoc(collection(db, 'overpassLogs'), {
     uid: auth.currentUser ? auth.currentUser.uid : null,
     timestamp: serverTimestamp(),
     elapsedMs,
     errorType,
     country: country || null,
-    buildId: BUILD_ID
+    buildId: BUILD_ID,
+    dataSource,
+    attempt,
+    requestId
   }).catch((err) => console.error('overpass log write failed:', err));
 }
 
@@ -3052,6 +3069,111 @@ async function fetchWays(bbox, searchQuery, country) {
   }
   logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: null, country });
   return data.elements || [];
+}
+
+// § Postpass migration (see postpass-migration-spec.md) — Phase 1: pure,
+// standalone functions only. Nothing below is called from fetchWays()
+// yet -- that's Phase 2 -- so each piece (query, adapter, retry loop)
+// can be verified in isolation first.
+
+function buildPostpassQuery(bbox) {
+  return `SELECT osm_id, geom, tags FROM postpass_line WHERE geom && ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326) AND tags?'highway' AND tags?'name'`;
+}
+
+// Resolved 2026-07-31 (spec §4.2): sampled 2,601 ways across 7 diverse
+// areas, including a major highway interchange and a roundabout-heavy
+// city -- zero multi-part geometries. MultiLineString appears to just be
+// Postpass's general packaging convention for line geometries, not a
+// signal that a way is actually split into disconnected parts. Takes the
+// first (and, so far, only) part; warns rather than silently mishandling
+// it if that assumption is ever wrong in practice.
+function flattenMultiLineString(geometry) {
+  if (geometry.coordinates.length > 1) {
+    console.warn('Postpass returned a multi-part MultiLineString -- unexpected, see postpass-migration-spec.md §4.2', geometry);
+  }
+  return geometry.coordinates[0].map(([lon, lat]) => ({ lat, lon }));
+}
+
+// Converts a Postpass FeatureCollection into the exact shape fetchWays()
+// already returns for Overpass, so processWays() and everything
+// downstream needs zero changes.
+function adaptPostpassResponse(geoJson) {
+  return geoJson.features.map((f) => ({
+    type: 'way',
+    id: f.properties.osm_id,
+    tags: f.properties.tags || {},
+    geometry: flattenMultiLineString(f.geometry)
+  }));
+}
+
+// Mirrors Overpass's `remark`-field soft-failure check above -- a 200 OK
+// whose body isn't actually a real FeatureCollection.
+function checkPostpassSoftFailure(data) {
+  if (data.type !== 'FeatureCollection') return 'unexpected response shape';
+  return null;
+}
+
+const POSTPASS_URL = 'https://postpass.geofabrik.de/api/interpreter';
+const POSTPASS_TOTAL_TIMEOUT_MS = 25000;
+const POSTPASS_ATTEMPT_TIMEOUT_MS = 8000;
+const POSTPASS_BACKOFF_MS = [250, 750, 1500];
+const POSTPASS_RETRYABLE_KINDS = new Set(['network', 'timeout', 'rate-limited', 'server-error']);
+
+// One attempt. Throws OsmFetchError either way (never a raw fetch/abort
+// error) so the retry loop below only ever has one error shape to
+// reason about.
+async function fetchPostpassOnce(query, timeoutMs) {
+  let res;
+  try {
+    res = await fetch(POSTPASS_URL, {
+      method: 'POST',
+      body: 'data=' + encodeURIComponent(query),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+  } catch (err) {
+    throw new OsmFetchError(err.name === 'TimeoutError' ? 'timeout' : 'network');
+  }
+  if (!res.ok) {
+    throw new OsmFetchError(classifyHttpFailure(res.status), res.status);
+  }
+  const data = await res.json();
+  const softFailure = checkPostpassSoftFailure(data);
+  if (softFailure) throw new OsmFetchError('server-error', res.status);
+  return adaptPostpassResponse(data);
+}
+
+// The proposed retry model (spec §4.4): a 25s total budget across all
+// attempts, an 8s per-attempt cap so one hung attempt can't consume the
+// whole budget and leave no room for a retry, and 250/750/1500ms backoff
+// -- only for the transient-looking kinds. A 'malformed' failure (a bug
+// in buildPostpassQuery itself, not real-world bbox variation -- see
+// classifyHttpFailure) stops immediately instead of burning the budget
+// on a guaranteed repeat failure. Every attempt is logged, win or lose.
+async function fetchFromPostpassWithRetry(bbox, requestId, country) {
+  const query = buildPostpassQuery(bbox);
+  const searchStart = Date.now();
+  let attempt = 0;
+  let lastError;
+
+  while (Date.now() - searchStart < POSTPASS_TOTAL_TIMEOUT_MS) {
+    attempt += 1;
+    const remainingMs = POSTPASS_TOTAL_TIMEOUT_MS - (Date.now() - searchStart);
+    const attemptTimeout = Math.max(1, Math.min(POSTPASS_ATTEMPT_TIMEOUT_MS, remainingMs));
+    const attemptStart = Date.now();
+    try {
+      const ways = await fetchPostpassOnce(query, attemptTimeout);
+      logOverpassQuery({ elapsedMs: Date.now() - attemptStart, errorType: null, country, dataSource: 'postpass', attempt, requestId });
+      return ways;
+    } catch (err) {
+      lastError = err;
+      logOverpassQuery({ elapsedMs: Date.now() - attemptStart, errorType: err.kind, country, dataSource: 'postpass', attempt, requestId });
+      if (!POSTPASS_RETRYABLE_KINDS.has(err.kind)) throw err;
+      const backoff = POSTPASS_BACKOFF_MS[Math.min(attempt - 1, POSTPASS_BACKOFF_MS.length - 1)];
+      if (POSTPASS_TOTAL_TIMEOUT_MS - (Date.now() - searchStart) - backoff <= 0) throw err;
+      await new Promise((r) => setTimeout(r, backoff));
+    }
+  }
+  throw lastError;
 }
 
 // § Data ingestion and cleaning pipeline — the automated roadway/pedestrian

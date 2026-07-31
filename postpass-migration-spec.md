@@ -480,7 +480,38 @@ Postpass (see §4.3's table). Not a blocker for Phase 1, but Phase 3's
 real-service retry test is still where that classification gets its
 first real exercise.
 
-**Phase 1 — Pure functions, no integration**
+**Phase 1 — Pure functions, no integration — DONE 2026-07-31**
+Wrote `buildPostpassQuery()`, `flattenMultiLineString()`,
+`adaptPostpassResponse()`, `checkPostpassSoftFailure()`,
+`fetchPostpassOnce()`, and `fetchFromPostpassWithRetry()` in
+`tmapdev/app.js`, right after the existing (unmodified) `fetchWays()` --
+nothing calls them yet. Also extended `classifyHttpFailure()` with a
+`malformed` kind for HTTP 400 (shared with Overpass's existing path, and
+added its user-facing message to `OSM_ERROR_MESSAGES` immediately, since
+that function is already live in production), and gave
+`logOverpassQuery()` default `dataSource='overpass'`/`attempt=1`/
+`requestId=null` parameters so the existing Overpass call sites need no
+edits to keep a consistent schema.
+
+Verified the adapter against real data: queried both services for the
+same Berkeley/Hearst bbox. 339 Overpass ways vs. 342 Postpass ways, tier
+histograms matching within the same small margin, 66 vs. 67 distinct
+street names with only one name present in Postpass but not Overpass
+("Milvia Street") -- consistent with ordinary mirror lag, not an adapter
+bug. A sample adapted way's shape (type/id/tags/geometry) matched
+exactly what `processWays()` and rendering expect.
+
+Verified the retry loop's mechanics with a mocked `fetch`, using the
+exact function as written (not a re-derivation): an always-failing mock
+gave up after 18 attempts at 23,671ms, within budget; a mock that hangs
+20s per call (far past the 8s cap) was correctly cut off near 8s each
+time, fitting exactly 3 attempts into the 25s window before giving up;
+a mocked HTTP 400 stopped after exactly 1 attempt in 1ms, confirming
+`malformed` isn't retried.
+
+Original text below, retained for what Phase 1 was scoped to do (see
+above for what actually happened):
+
 Write `buildPostpassQuery()`, `adaptPostpassResponse()`, the
 soft-failure check, and `fetchFromPostpassWithRetry()` (§4.4) as
 standalone functions. Verify the adapter by hand: take a real Overpass
