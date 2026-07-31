@@ -531,9 +531,14 @@ long-hung attempt doesn't consume the whole budget (the 8s per-attempt
 cap kicks in), and confirm a non-retryable failure kind stops
 immediately rather than burning through backoff attempts.
 
-**Phase 2 — Integrate behind the flag, default off**
-Wire `DATA_SOURCE` into `fetchWays()`. Mergeable and deployable with zero
-behavior change while the flag stays `'overpass'`.
+**Phase 2 — Integrate behind the flag, default off — DONE 2026-07-31**
+Wired `DATA_SOURCE` into `fetchWays()`. Deployed to `tmapdev` with the
+flag at its default (`'overpass'`) and confirmed live: a real search
+went through the new branch, correctly skipped it, and completed a
+genuine Overpass fetch exactly as before (title updated to "1516 Hearst
+Avenue, Berkeley, California, 94703", no console errors beyond an
+unrelated browser-extension artifact). Zero behavior change confirmed,
+not just assumed from the diff being small.
 
 **Phase 3 — Local verification with the flag on**
 Using a local static server (not the sandboxed test harness that's
