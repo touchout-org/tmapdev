@@ -449,6 +449,11 @@ in place *before* development starts, not retrofitted afterward:
   suffixed key names (e.g. `dottmap-settings-dev`,
   `dottmap-current-map-dev`, a distinct ways-cache database name),
   gated on which build is running — not a manual step to remember.
+  **Confirmed working 2026-07-31** — shipped as part of the environment
+  setup, verified live (a fresh `tmapdev` load doesn't restore `tmap`'s
+  old shared current-map, confirmed via a real Chrome tab reading
+  `localStorage`/`indexedDB.databases()` directly), and independently
+  re-confirmed by Josh testing both read and write paths himself.
 - **An unmistakable `buildId` prefix** — e.g. `tmapdev-2026-07-30`
   instead of the plain date string `tmap` uses — so `tmapdev`'s test
   traffic is self-evidently separable from real production traffic in

@@ -82,6 +82,13 @@ const USE_LOCAL_TEST_DATA_CACHE = false;
 // screenshot before pushing).
 const USE_FIREBASE_EMULATORS = false;
 
+// § Postpass migration (see postpass-migration-spec.md) — which live
+// street-data source fetchWays() uses. Default 'overpass' so this is
+// mergeable/deployable at any point with zero behavior change; flipping
+// this one constant (and redeploying) is the entire rollback surface if
+// Postpass ever needs to be backed out once it's live -- see spec §4.5.
+const DATA_SOURCE = 'overpass'; // 'overpass' | 'postpass'
+
 // Not secret -- Firestore/Auth access control is enforced by firestore.rules
 // and the emulator, not by hiding this. Safe to commit as-is.
 const firebaseConfig = {
@@ -3037,9 +3044,19 @@ function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpas
 // same key geocode() uses for the same search. country is purely for
 // logOverpassQuery's analytics row below -- see call sites for where it
 // does/doesn't have a real value.
+//
+// DATA_SOURCE branch (spec §4.5): Postpass gets its own retry-wrapped
+// path; Overpass's existing single-attempt code below is completely
+// unchanged either way. Both callers of fetchWays() (createNewAnchor,
+// loadMapRecord) are unaware this branch exists -- they just get ways
+// back or an OsmFetchError, same contract as before.
 async function fetchWays(bbox, searchQuery, country) {
   const cached = await loadLocalTestData(searchQuery);
   if (cached) return cached.ways;
+
+  if (DATA_SOURCE === 'postpass') {
+    return fetchFromPostpassWithRetry(bbox, crypto.randomUUID(), country);
+  }
 
   const overpassQuery = `[out:json][timeout:25];way["highway"]["name"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});out geom;`;
   const fetchStart = Date.now();
