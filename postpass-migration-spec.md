@@ -609,22 +609,31 @@ reach production users — the same reasoning behind testing every push on
 real
 Dot Pad hardware rather than trusting it "should" work.
 
-**Phase 5 — Merge back into `tmap`, then a soft production rollout**
-Only once Phase 4's live `tmapdev` soak test is convincing: this is the
-point where the finished, validated work actually moves to production —
-add `tmap`'s repo as a second git remote inside the `tmapdev` working
-copy and push the finished commits across (preserving history, rather
-than manually copying files), reverting the `tmapdev`-only storage-key
-namespacing and `buildId` prefix along the way — production keeps its
-plain key names and date-only `buildId`. Deploy with `DATA_SOURCE` still
-`'overpass'` first if any doubt remains about the merge itself;
-otherwise flip it to `'postpass'` in the same deploy, with the Overpass
-code path left completely intact behind the constant. Watch
-`admin/overpass-stats` for at least a few days of real *production*
-traffic before considering this settled — Phase 4's tmapdev data is
-encouraging evidence, not a substitute for watching production itself.
-Rollback at any sign of trouble is the one-line flag flip, not a git
-revert.
+**Phase 5 — Merge back into `tmap`, then a soft production rollout — STARTED 2026-08-01**
+Cut short of the original "at least a few days" soak target — Josh
+called it early because live Overpass reliability kept degrading further
+during Phase 4 (see `admin/overpass-stats`), making the urgency of
+shipping the fix outweigh waiting out the full soak window. `tmap`'s
+`app.js` was replaced with `tmapdev`'s current one wholesale rather than
+via the originally-planned second-remote git merge — the two files
+differ *only* in the Postpass migration itself (confirmed via
+`git diff tmap-prod/main HEAD -- app.js` before copying), so a direct
+copy was the safer, more auditable move under time pressure than
+untangling tmapdev's environment-setup commit from its migration commits
+in a live git history merge. No manual reversion of storage-key
+namespacing/`buildId` prefix was needed — `IS_DEV_BUILD` (see
+`tmapdev`'s environment setup above) evaluates to `false` on `tmap`'s
+own domain path by construction, so the file is safely byte-identical
+between the two repos as designed. `index.html`/`robots.txt` (the only
+other files `tmapdev` had touched, both purely dev-banner/`noindex`
+additions) were left untouched in `tmap`. `DATA_SOURCE` was already
+`'postpass'` in the copied file (Phase 4's flip), so this deploy flips
+production directly rather than doing the extra overpass-first
+verification deploy — release notes entry added same day. Now: watch
+`admin/overpass-stats` for real *production* traffic before considering
+this phase settled — Phase 4's tmapdev data is encouraging evidence, not
+a substitute for watching production itself. Rollback at any sign of
+trouble is the one-line flag flip, not a git revert.
 
 **Phase 6 — Decide what's next (after Phase 5 production data, not before)**
 Once there's a real production track record: decide whether to keep
