@@ -425,10 +425,10 @@ without deliberate, realistic-state browser verification, not just
 ### Development environment: build this in `tmapdev`, not `tmap`
 
 Now that real users are on the live site — the whole reason the
-analytics work this week exists — **Phases 0–3 below happen entirely in
+analytics work this week exists — **Phases 0–4 below happen entirely in
 a separate `tmapdev` repo and deployment**, a full independent clone of
 `tmap` (not a branch), so none of this migration touches the live site
-until Phase 4 deliberately moves the finished work back. `tmapdev`
+until Phase 5 deliberately moves the finished work back. `tmapdev`
 deploys to `touchout.org/tmapdev` — same domain as production, so the
 existing Google Maps API key restriction and Firebase Auth authorized-
 domains setting already cover it, no new key or domain config needed —
@@ -588,31 +588,49 @@ failed with the existing "query took too long" message. The 5 healthy
 searches above each logged a single `attempt: 1` row at ~1.2–1.7s,
 confirming the retry machinery adds no overhead on the happy path.
 
-**Phase 4 — Merge back into `tmap`, then a soft production rollout**
-This is the point where the finished, `tmapdev`-validated work actually
-moves to production: add `tmap`'s repo as a second git remote inside the
-`tmapdev` working copy and push the finished commits across (preserving
-history, rather than manually copying files), reverting the
-`tmapdev`-only storage-key namespacing and `buildId` prefix along the
-way — production keeps its plain key names and date-only `buildId`.
-Deploy with `DATA_SOURCE` still `'overpass'` first if any doubt remains
-about the merge itself; otherwise flip it to `'postpass'` in the same
-deploy, with the Overpass code path left completely intact behind the
-constant. Watch `admin/overpass-stats` (now broken down by `dataSource`)
-for at least a few days of real traffic before considering this
-settled. Rollback at any sign of trouble is the one-line flag flip, not
-a git revert.
+**Phase 4 — Soak-test live on `tmapdev`, flag on, before touching `tmap`**
+Flip `DATA_SOURCE` to `'postpass'` in `tmapdev` and deploy — still only
+to `touchout.org/tmapdev`, `tmap`/production completely untouched. Use
+it as a real daily driver for genuine searches (not just the scripted
+Phase 3 checks) for at least a few days, watching
+`admin/overpass-stats` (broken down by `dataSource`, and by `buildId`
+since `tmapdev`'s builds are self-evidently separable from production
+traffic — see the `tmapdev-` prefix above) for real-world reliability
+and latency, not just the handful of locations Phase 3 exercised.
+Rollback here is trivial and low-stakes precisely because no real users
+are on `tmapdev` — flip the flag back or just keep developing. This
+phase exists specifically so the *first* time Postpass carries real,
+unscripted, unpredictable traffic is somewhere a bug can't reach
+production users — the same reasoning behind testing every push on real
+Dot Pad hardware rather than trusting it "should" work.
 
-**Phase 5 — Decide what's next (after Phase 4 data, not before)**
+**Phase 5 — Merge back into `tmap`, then a soft production rollout**
+Only once Phase 4's live `tmapdev` soak test is convincing: this is the
+point where the finished, validated work actually moves to production —
+add `tmap`'s repo as a second git remote inside the `tmapdev` working
+copy and push the finished commits across (preserving history, rather
+than manually copying files), reverting the `tmapdev`-only storage-key
+namespacing and `buildId` prefix along the way — production keeps its
+plain key names and date-only `buildId`. Deploy with `DATA_SOURCE` still
+`'overpass'` first if any doubt remains about the merge itself;
+otherwise flip it to `'postpass'` in the same deploy, with the Overpass
+code path left completely intact behind the constant. Watch
+`admin/overpass-stats` for at least a few days of real *production*
+traffic before considering this settled — Phase 4's tmapdev data is
+encouraging evidence, not a substitute for watching production itself.
+Rollback at any sign of trouble is the one-line flag flip, not a git
+revert.
+
+**Phase 6 — Decide what's next (after Phase 5 production data, not before)**
 Once there's a real production track record: decide whether to keep
 Overpass code as a permanent fallback path, or retire it. Not a decision
 to make upfront.
 
 ## 7. Success criteria
 
-- Phase 4's `admin/overpass-stats` data shows Postpass's production
-  failure rate and p95 latency meaningfully better than Overpass's
-  historical 29.2%/11.6s figures, sustained over multiple days, not just
-  a lucky window.
+- Phase 4's live `tmapdev` data and Phase 5's production
+  `admin/overpass-stats` data both show Postpass's failure rate and p95
+  latency meaningfully better than Overpass's historical 29.2%/11.6s
+  figures, sustained over multiple days, not just a lucky window.
 - No user-visible regression in map correctness (way count, names,
   tiers) versus the Overpass-sourced maps that came before.
