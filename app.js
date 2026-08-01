@@ -3144,6 +3144,7 @@ async function fetchPostpassOnce(query, timeoutMs) {
   try {
     res = await fetch(POSTPASS_URL, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'data=' + encodeURIComponent(query),
       signal: AbortSignal.timeout(timeoutMs)
     });
