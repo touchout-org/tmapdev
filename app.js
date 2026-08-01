@@ -87,7 +87,7 @@ const USE_FIREBASE_EMULATORS = false;
 // mergeable/deployable at any point with zero behavior change; flipping
 // this one constant (and redeploying) is the entire rollback surface if
 // Postpass ever needs to be backed out once it's live -- see spec §4.5.
-const DATA_SOURCE = 'overpass'; // 'overpass' | 'postpass'
+const DATA_SOURCE = 'postpass'; // 'overpass' | 'postpass'
 
 // Not secret -- Firestore/Auth access control is enforced by firestore.rules
 // and the emulator, not by hiding this. Safe to commit as-is.
