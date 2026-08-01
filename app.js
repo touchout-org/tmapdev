@@ -336,6 +336,15 @@ const btnSearch = document.getElementById('btn-search');
 const anchorHeading = document.getElementById('anchor-heading');
 const mapSvg = document.getElementById('map');
 const messageDisplay = document.getElementById('message-display');
+// role="alert"/aria-live are set here in JS rather than baked into
+// index.html's static markup -- a role="alert" live region present in the
+// raw page markup gets announced by some screen readers (confirmed on
+// NVDA) as a bare, contentless "alert" purely because the region exists
+// at page load, before setMessage() ever writes real text into it. Adding
+// the attributes after the initial parse avoids that phantom announcement
+// entirely; every real setMessage() call still gets announced normally.
+messageDisplay.setAttribute('role', 'alert');
+messageDisplay.setAttribute('aria-live', 'assertive');
 const btnConnect = document.getElementById('btn-connect');
 const mainMenuButton = document.getElementById('main-menu-button');
 const mainMenu = document.getElementById('main-menu');
