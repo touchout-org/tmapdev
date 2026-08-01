@@ -326,7 +326,6 @@ const CURSOR_HIT_RADIUS = 2;
 const POI_MARKER_DOTS = 3;
 
 const browserWarning = document.getElementById('browser-warning');
-const devBuildBanner = document.getElementById('dev-build-banner');
 const devCacheBanner = document.getElementById('dev-cache-banner');
 const devEmulatorBanner = document.getElementById('dev-emulator-banner');
 const searchForm = document.getElementById('search-form');
@@ -821,14 +820,6 @@ if (!isChrome()) {
 // calling focus() explicitly is the standard, more robust fix for exactly
 // this kind of autofocus flakiness across browsers/tab states.
 btnConnect.focus();
-
-// § Postpass migration dev environment — unconditional, unlike the two
-// banners below (which are gated on a flag someone could forget to flip
-// back): this one just reflects which site is actually being served, so
-// there's nothing to forget.
-if (IS_DEV_BUILD) {
-  devBuildBanner.hidden = false;
-}
 
 // § Local test data cache — unmissable visual flag (not just a code
 // comment) that this build is serving cached data instead of hitting the
