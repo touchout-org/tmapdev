@@ -588,20 +588,25 @@ failed with the existing "query took too long" message. The 5 healthy
 searches above each logged a single `attempt: 1` row at ~1.2–1.7s,
 confirming the retry machinery adds no overhead on the happy path.
 
-**Phase 4 — Soak-test live on `tmapdev`, flag on, before touching `tmap`**
-Flip `DATA_SOURCE` to `'postpass'` in `tmapdev` and deploy — still only
-to `touchout.org/tmapdev`, `tmap`/production completely untouched. Use
-it as a real daily driver for genuine searches (not just the scripted
-Phase 3 checks) for at least a few days, watching
-`admin/overpass-stats` (broken down by `dataSource`, and by `buildId`
-since `tmapdev`'s builds are self-evidently separable from production
-traffic — see the `tmapdev-` prefix above) for real-world reliability
-and latency, not just the handful of locations Phase 3 exercised.
-Rollback here is trivial and low-stakes precisely because no real users
-are on `tmapdev` — flip the flag back or just keep developing. This
-phase exists specifically so the *first* time Postpass carries real,
-unscripted, unpredictable traffic is somewhere a bug can't reach
-production users — the same reasoning behind testing every push on real
+**Phase 4 — Soak-test live on `tmapdev`, flag on, before touching `tmap` — STARTED 2026-07-31**
+`DATA_SOURCE` flipped to `'postpass'` and deployed (commit `bb2a0c2`,
+live at `touchout.org/tmapdev` as of 2026-07-31 23:29 PDT) — still only
+`touchout.org/tmapdev`, `tmap`/production completely untouched.
+Confirmed working against real traffic immediately after deploy (a real
+search hit `postpass.geofabrik.de` and rendered correctly). Now: use it
+as a real daily driver for genuine searches (not just the scripted
+Phase 3 checks) for at least a few days, watching `admin/overpass-stats`
+(broken down by `dataSource`, and by `buildId` since `tmapdev`'s builds
+are self-evidently separable from production traffic — see the
+`tmapdev-` prefix above) for real-world reliability and latency, not
+just the handful of locations Phase 3 exercised. Don't mark this phase
+DONE on deploy alone — see its own criteria below for what "done"
+actually means. Rollback here is trivial and low-stakes precisely
+because no real users are on `tmapdev` — flip the flag back or just keep
+developing. This phase exists specifically so the *first* time Postpass
+carries real, unscripted, unpredictable traffic is somewhere a bug can't
+reach production users — the same reasoning behind testing every push on
+real
 Dot Pad hardware rather than trusting it "should" work.
 
 **Phase 5 — Merge back into `tmap`, then a soft production rollout**
