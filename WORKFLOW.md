@@ -44,6 +44,20 @@ that a *local-only testing flag* (`USE_LOCAL_TEST_DATA_CACHE`/
 `USE_FIREBASE_EMULATORS`) was accidentally left on before a deploy — a
 real mistake worth catching loudly, unrelated to dev-vs-prod identity.
 
+## GitHub Issues: tmap only (2026-08-02)
+
+`tmap/issues` is the sole source of truth for bug reports and feature
+requests. GitHub Issues is **disabled on the `tmapdev` repo itself**
+(repo settings — `gh repo edit touchout-org/tmapdev --enable-issues=false`,
+done 2026-08-02) specifically so there's no tab or URL to accidentally
+file into over there. The in-app "File an Issue" button (`btnFileIssue`
+in `app.js`) already hardcodes `https://github.com/touchout-org/tmap/issues/new`
+unconditionally, regardless of which site it's actually running on — this
+was already correct before Issues was disabled on `tmapdev` and doesn't
+need touching if it's ever revisited; don't make it derive the target
+repo from `IS_DEV_BUILD` or anything path-based, it should always point
+at `tmap`.
+
 ## Dev-only commits
 
 Any commit whose content must never reach `tmap` — storage-key
