@@ -44,7 +44,7 @@
 
   <div id="map-row">
     <div id="poi-list-container">
-      <label for="poi-list" id="poi-list-label">POIs</label>
+      <label for="poi-list" id="poi-list-label">Pins</label>
       <select id="poi-list" disabled></select>
       <button id="btn-drop-pin" type="button" disabled>Drop Pin</button>
     </div>
@@ -67,10 +67,10 @@
   </dialog>
 
   <dialog id="custom-poi-dialog" aria-labelledby="custom-poi-heading">
-    <h3 id="custom-poi-heading">Custom POI</h3>
+    <h3 id="custom-poi-heading">Custom Pin</h3>
     <p id="custom-poi-status" aria-live="polite"></p>
     <form id="custom-poi-form">
-      <label for="custom-poi-name">POI Name:</label>
+      <label for="custom-poi-name">Pin Name:</label>
       <input type="text" id="custom-poi-name" name="poi-name" autocomplete="off" required>
       <button id="btn-custom-poi-ok" type="submit">OK</button>
       <button id="btn-custom-poi-cancel" type="button">Cancel</button>
@@ -82,7 +82,7 @@
   <dialog id="edit-map-dialog" aria-labelledby="edit-map-dialog-heading">
     <h3 id="edit-map-dialog-heading">Customize Map</h3>
     <details id="edit-map-pois">
-      <summary><h4>POIs</h4></summary>
+      <summary><h4>Pins</h4></summary>
       <div class="edit-map-list" id="edit-map-pois-list"></div>
     </details>
     <details id="edit-map-visible-streets">
@@ -111,7 +111,7 @@
           <tr>
             <th scope="col" aria-sort="none"><button type="button" class="sort-header" id="saved-maps-sort-name">Name</button></th>
             <th scope="col" aria-sort="descending"><button type="button" class="sort-header" id="saved-maps-sort-date">Date/Time</button></th>
-            <th scope="col">POIs</th>
+            <th scope="col">Pins</th>
             <th scope="col">Hidden Features</th>
             <th scope="col">Notes</th>
             <th scope="col">Actions</th>
@@ -134,7 +134,7 @@
           <tr>
             <th scope="col">Name</th>
             <th scope="col">Date/Time</th>
-            <th scope="col">POIs</th>
+            <th scope="col">Pins</th>
             <th scope="col">Hidden Features</th>
           </tr>
         </thead>

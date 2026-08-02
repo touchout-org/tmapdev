@@ -5129,7 +5129,7 @@ function openStreetListDialog() {
   streetListContent.innerHTML = '';
   if (pois.length === 0 && streets.length === 0) {
     const p = document.createElement('p');
-    p.textContent = 'No streets or POIs are currently visible.';
+    p.textContent = 'No streets or Pins are currently visible.';
     streetListContent.appendChild(p);
   } else {
     const list = document.createElement('ul');
