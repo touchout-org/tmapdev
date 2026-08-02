@@ -1,5 +1,5 @@
 <h4>Getting Started</h4>
-<p>Type an address or place name into the field at the top of the page and press Search (or Enter) to create your first map, centered on that location — this becomes the "anchor pin." Once a map exists, entering another nearby location either adds it to the current map as an additional pin, or, if it's too far away, offers to start a new map centered there instead.</p>
+<p>Click the New Map button and type an address or place name, then Search, to create your first map, centered on that location — this becomes the "anchor pin." Once a map exists, the New Map button is replaced by a New menu with New Map and New Pin items: New Pin adds another location to the current map (or, if it's too far away, offers to start a new map centered there instead) via its own Search button, or drops a custom-named pin right at your cursor.</p>
 <p>* * note: There are 6 keys on the DotPad. The following documentation uses Perkins-style dot number notation to describe commands entered from the DotPad itself.</p>
 
 <h4>Connecting the Dot Pad</h4>
@@ -86,7 +86,8 @@
     </tr>
   </thead>
   <tbody>
-    <tr><td>Open Drop Pin dialog</td><td>a</td><td>none</td><td>Add a custom-named pin at the cursor</td></tr>
+    <tr><td>Open New Map dialog</td><td>n</td><td>none</td><td>Start a fresh map, replacing the current one</td></tr>
+    <tr><td>Open New Pin dialog</td><td>p</td><td>none</td><td>Drop a custom-named pin at the cursor, or search for one to add</td></tr>
     <tr><td>Next pin</td><td>.</td><td>Dot 4</td><td>Jumps to the next pin in the list</td></tr>
     <tr><td>Previous pin</td><td>,</td><td>Dot 1</td><td>Jumps to the previous pin in the list</td></tr>
   </tbody>
@@ -148,8 +149,11 @@
   </tbody>
 </table>
 
-<h4>Drop Pin</h4>
-<p>Opens via the <code>a</code> hotkey or the Drop Pin button next to the Pin list. DotTMAP looks up nearby businesses and attractions from Google, plus the closest street address, and lists them alphabetically; the first one fills in the name field automatically, selected, so just starting to type replaces it. Up/Down step through the rest of the suggestions the same way (they stop at either end, no wraparound). If you start typing before the suggestions arrive, your text is left alone — press Down to get the first suggestion. OK always drops the new pin at the cursor's current position, no matter which suggestion is showing; Cancel adds nothing.</p>
+<h4>New Map</h4>
+<p>Opens via the New Map button (before any map exists) or the New menu's New Map item (once one does), or the <code>n</code> hotkey. Search for a location and it always becomes the center of a fresh map, replacing whatever's currently showing (which is added to your Map History automatically) — Cancel closes the dialog without doing anything.</p>
+
+<h4>New Pin</h4>
+<p>Opens via the New menu's New Pin item, or the <code>p</code> hotkey (only available once a map exists, same as the menu item). DotTMAP looks up nearby businesses and attractions from Google, plus the closest street address, and lists them alphabetically; the first one fills in the name field automatically, selected, so just starting to type replaces it. Up/Down step through the rest of the suggestions the same way (they stop at either end, no wraparound). If you start typing before the suggestions arrive, your text is left alone — press Down to get the first suggestion. Drop Pin Here always drops a new pin at the cursor's current position, no matter which suggestion is showing; Search instead treats the field's text as a location to add to the map (or, if it's too far away, offers to start a new map there instead); Cancel adds nothing.</p>
 
 <h4>Display Preferences</h4>
 <p>Opens from the Main Menu. Every control here applies immediately — there's no OK/Cancel, just a Done button to close it. Includes Braille Translation, the four braille label checkboxes, Units (Imperial/Metric — affects Scale and how distances are announced), Scale, Pan Amount, Automatic simplification (see below), and Cursor Solo Timeout (1/2/3/5 seconds, or None) — how long cursor-only mode stays on before automatically restoring everything on its own; changing it while cursor-only mode is already active and counting down takes effect immediately, restarting the countdown under the new duration.</p>

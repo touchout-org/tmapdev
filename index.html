@@ -32,11 +32,18 @@
 
   <h1>Welcome to DotTMAP</h1>
 
-  <form id="search-form">
-    <label for="location-input" id="location-label">Enter an address or location to get started:</label>
-    <input type="text" id="location-input" name="location" autocomplete="off">
-    <button type="submit" id="btn-search">Search</button>
-  </form>
+  <p id="start-instructions">Search for an address or location to get started.</p>
+
+  <div id="new-row">
+    <button type="button" id="btn-new-map-standalone" title="Search: Open a map centered on a new location.">New Map</button>
+    <div id="new-menu-container" hidden>
+      <button type="button" id="new-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="new-menu">New</button>
+      <ul id="new-menu" role="menu" aria-labelledby="new-menu-button" hidden>
+        <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-new-map" title="Search: Open a map centered on a new location.">New Map</button></li>
+        <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-new-pin" title="Mark a new location on this map.">New Pin</button></li>
+      </ul>
+    </div>
+  </div>
 
   <div id="anchor-row">
     <h2 id="anchor-heading" hidden></h2>
@@ -46,12 +53,22 @@
     <div id="poi-list-container">
       <label for="poi-list" id="poi-list-label">Pins</label>
       <select id="poi-list" disabled></select>
-      <button id="btn-drop-pin" type="button" disabled>Drop Pin</button>
     </div>
     <div id="map-container">
       <svg id="map" viewBox="0 0 600 400" role="img" aria-label="Street map"></svg>
     </div>
   </div>
+
+  <dialog id="new-map-dialog" aria-labelledby="new-map-heading">
+    <h3 id="new-map-heading">New Map</h3>
+    <p id="new-map-instructions"></p>
+    <form id="new-map-form">
+      <label for="new-map-location">New map location:</label>
+      <input type="text" id="new-map-location" name="location" autocomplete="off" required>
+      <button type="submit" id="btn-new-map-search">Search</button>
+      <button type="button" id="btn-new-map-cancel">Cancel</button>
+    </form>
+  </dialog>
 
   <dialog id="poi-too-far-dialog" aria-labelledby="poi-too-far-heading">
     <h3 id="poi-too-far-heading">Location Too Far</h3>
@@ -67,12 +84,14 @@
   </dialog>
 
   <dialog id="custom-poi-dialog" aria-labelledby="custom-poi-heading">
-    <h3 id="custom-poi-heading">Custom Pin</h3>
+    <h3 id="custom-poi-heading">New Pin</h3>
+    <p id="custom-poi-instructions">Name a pin here, or search for a location elsewhere on this map.</p>
     <p id="custom-poi-status" aria-live="polite"></p>
     <form id="custom-poi-form">
       <label for="custom-poi-name">Pin Name:</label>
       <input type="text" id="custom-poi-name" name="poi-name" autocomplete="off" required>
-      <button id="btn-custom-poi-ok" type="submit">OK</button>
+      <button id="btn-custom-poi-ok" type="submit" title="Enter a name and drop it">Drop Pin Here</button>
+      <button id="btn-custom-poi-search" type="button" title="Search: Put a pin on this map at a new location">Search</button>
       <button id="btn-custom-poi-cancel" type="button">Cancel</button>
     </form>
   </dialog>

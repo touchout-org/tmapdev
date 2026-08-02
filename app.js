@@ -328,10 +328,18 @@ const POI_MARKER_DOTS = 3;
 const browserWarning = document.getElementById('browser-warning');
 const devCacheBanner = document.getElementById('dev-cache-banner');
 const devEmulatorBanner = document.getElementById('dev-emulator-banner');
-const searchForm = document.getElementById('search-form');
-const locationLabel = document.getElementById('location-label');
-const locationInput = document.getElementById('location-input');
-const btnSearch = document.getElementById('btn-search');
+const startInstructions = document.getElementById('start-instructions');
+const btnNewMapStandalone = document.getElementById('btn-new-map-standalone');
+const newMenuContainer = document.getElementById('new-menu-container');
+const newMenuButton = document.getElementById('new-menu-button');
+const newMenu = document.getElementById('new-menu');
+const menuNewMap = document.getElementById('menu-new-map');
+const menuNewPin = document.getElementById('menu-new-pin');
+const newMapDialog = document.getElementById('new-map-dialog');
+const newMapInstructions = document.getElementById('new-map-instructions');
+const newMapForm = document.getElementById('new-map-form');
+const newMapLocationInput = document.getElementById('new-map-location');
+const btnNewMapCancel = document.getElementById('btn-new-map-cancel');
 const anchorHeading = document.getElementById('anchor-heading');
 const mapSvg = document.getElementById('map');
 const messageDisplay = document.getElementById('message-display');
@@ -355,7 +363,6 @@ const labelCheckboxes = {
   right: document.getElementById('label-right')
 };
 const poiListSelect = document.getElementById('poi-list');
-const btnDropPin = document.getElementById('btn-drop-pin');
 const poiTooFarDialog = document.getElementById('poi-too-far-dialog');
 const poiTooFarMessage = document.getElementById('poi-too-far-message');
 const btnPoiShowAnyway = document.getElementById('btn-poi-show-anyway');
@@ -367,6 +374,7 @@ const customPoiDialog = document.getElementById('custom-poi-dialog');
 const customPoiStatus = document.getElementById('custom-poi-status');
 const customPoiForm = document.getElementById('custom-poi-form');
 const customPoiNameInput = document.getElementById('custom-poi-name');
+const btnCustomPoiSearch = document.getElementById('btn-custom-poi-search');
 const btnCustomPoiCancel = document.getElementById('btn-custom-poi-cancel');
 const btnEditMap = document.getElementById('menu-customize-map');
 const editMapDialog = document.getElementById('edit-map-dialog');
@@ -1160,6 +1168,96 @@ document.addEventListener('click', (event) => {
   }
 });
 
+// § New Map / New Pin — the "New" menu, same WAI-ARIA Actions Menu Button
+// pattern as Main Menu above (see openMainMenu et al.), just a second,
+// independent instance for its own two items. Only shown once a current
+// map exists (see showAnchor's one-time UI switch below) -- before that,
+// btnNewMapStandalone is the sole entry point, since New Pin has no
+// current map to add a pin to yet.
+function newMenuItems() {
+  return Array.from(newMenu.querySelectorAll('[role="menuitem"]')).filter((item) => !item.hidden);
+}
+
+function openNewMenu(focusIndex) {
+  newMenu.hidden = false;
+  newMenuButton.setAttribute('aria-expanded', 'true');
+  focusNewMenuItem(focusIndex);
+}
+
+function closeNewMenu({ focusButton = false } = {}) {
+  if (newMenu.hidden) return;
+  newMenu.hidden = true;
+  newMenuButton.setAttribute('aria-expanded', 'false');
+  if (focusButton) newMenuButton.focus();
+}
+
+function focusNewMenuItem(index) {
+  const items = newMenuItems();
+  items.forEach((item, i) => item.setAttribute('tabindex', i === index ? '0' : '-1'));
+  items[index].focus();
+}
+
+newMenuButton.addEventListener('click', () => {
+  if (newMenu.hidden) {
+    openNewMenu(0);
+  } else {
+    closeNewMenu();
+  }
+});
+
+newMenuButton.addEventListener('keydown', (event) => {
+  if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openNewMenu(0);
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    openNewMenu(newMenuItems().length - 1);
+  }
+});
+
+Array.from(newMenu.querySelectorAll('[role="menuitem"]')).forEach((item) => {
+  item.addEventListener('keydown', (event) => {
+    const items = newMenuItems();
+    const index = items.indexOf(item);
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      focusNewMenuItem((index + 1) % items.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      focusNewMenuItem((index - 1 + items.length) % items.length);
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      focusNewMenuItem(0);
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      focusNewMenuItem(items.length - 1);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeNewMenu({ focusButton: true });
+    } else if (event.key === 'Tab') {
+      closeNewMenu();
+    }
+  });
+});
+
+document.addEventListener('click', (event) => {
+  if (!newMenu.hidden && !event.target.closest('#new-menu-container')) {
+    closeNewMenu();
+  }
+});
+
+btnNewMapStandalone.addEventListener('click', openNewMapDialog);
+
+menuNewMap.addEventListener('click', () => {
+  closeNewMenu({ focusButton: true });
+  openNewMapDialog();
+});
+
+menuNewPin.addEventListener('click', () => {
+  closeNewMenu({ focusButton: true });
+  openCustomPoiDialog();
+});
+
 // § Settings — every control in this dialog is live-apply now (a change
 // takes effect immediately, not gated behind a commit step): opening the
 // dialog only needs to sync each control's displayed value/checked state to
@@ -1456,24 +1554,21 @@ function clearCursorSoloTimer() {
 }
 
 
-searchForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  // Move focus off the text field and onto Search on every submit
-  // (including pressing Enter in the field) rather than leaving it in the
-  // edit field, where a screen reader user could accidentally retype into it.
-  btnSearch.focus();
-  const query = locationInput.value.trim();
-  if (query) {
-    runSearch(query);
-  }
-});
-
+// § New Map / New Pin — forceNewAnchor distinguishes the two dialogs'
+// Search actions: New Map always wants a fresh anchor regardless of
+// distance from whatever's currently showing (per ui cleanup.md); New Pin
+// wants today's existing behavior (join the current map, or offer to
+// replace it, based on distance from the anchor). Threaded through every
+// step of the flow, including the "Did you mean...?" fallback, so picking
+// a suggested candidate still honors whichever dialog the search started
+// from.
+//
 // Note: this function's own `query` parameter (the search text) shadows
 // the Firestore `query()` import used elsewhere in this file (see
 // openMyArchivesDialog) -- never reference the Firestore query function by
 // name inside this function's body, it will silently resolve to the
 // string parameter instead and throw at call time.
-async function runSearch(query) {
+async function runSearch(query, forceNewAnchor) {
   setMessage('Searching…');
   let place;
   try {
@@ -1484,7 +1579,7 @@ async function runSearch(query) {
   }
 
   if (place) {
-    await proceedWithPlace(place, query);
+    await proceedWithPlace(place, query, forceNewAnchor);
     return;
   }
 
@@ -1500,17 +1595,14 @@ async function runSearch(query) {
     setMessage('No results');
     return;
   }
-  showDidYouMeanDialog(candidates, query);
+  showDidYouMeanDialog(candidates, query, forceNewAnchor);
 }
 
 // Shared by a normal successful geocode() and by picking a candidate from
 // the "Did you mean...?" dialog -- both end up with a resolved place and
-// need to run the exact same anchor/additional-POI/too-far logic.
-async function proceedWithPlace(place, query) {
-  // § Screen Layout — the edit field is only for entering a location to
-  // search for; once one's been found, its job here is done.
-  locationInput.value = '';
-
+// need to run the exact same anchor/additional-POI/too-far logic (unless
+// forceNewAnchor, see runSearch above).
+async function proceedWithPlace(place, query, forceNewAnchor) {
   const lat = parseFloat(place.lat);
   const lon = parseFloat(place.lon);
   const displayName = formatPlaceName(place);
@@ -1520,7 +1612,7 @@ async function proceedWithPlace(place, query) {
   // loadMapRecord reload, since that has no fresh geocode result.
   const country = (place.address && place.address.country) || null;
 
-  if (!hasAnchor) {
+  if (forceNewAnchor || !hasAnchor) {
     await createNewAnchor(displayName, shortName, lat, lon, query, country);
     return;
   }
@@ -1545,9 +1637,11 @@ async function proceedWithPlace(place, query) {
 // the dialog and proceeds exactly like a normal successful geocode, Cancel
 // dismisses it with no further action.
 let pendingDidYouMeanQuery = null;
+let pendingDidYouMeanForceNewAnchor = false;
 
-function showDidYouMeanDialog(candidates, query) {
+function showDidYouMeanDialog(candidates, query, forceNewAnchor) {
   pendingDidYouMeanQuery = query;
+  pendingDidYouMeanForceNewAnchor = forceNewAnchor;
   didYouMeanList.innerHTML = '';
   candidates.forEach((candidate) => {
     const li = document.createElement('li');
@@ -1558,8 +1652,10 @@ function showDidYouMeanDialog(candidates, query) {
     button.addEventListener('click', () => {
       didYouMeanDialog.close();
       const forQuery = pendingDidYouMeanQuery;
+      const forForceNewAnchor = pendingDidYouMeanForceNewAnchor;
       pendingDidYouMeanQuery = null;
-      proceedWithPlace(candidate, forQuery);
+      pendingDidYouMeanForceNewAnchor = false;
+      proceedWithPlace(candidate, forQuery, forForceNewAnchor);
     });
     li.appendChild(button);
     didYouMeanList.appendChild(li);
@@ -1570,7 +1666,31 @@ function showDidYouMeanDialog(candidates, query) {
 btnDidYouMeanCancel.addEventListener('click', () => {
   didYouMeanDialog.close();
   pendingDidYouMeanQuery = null;
+  pendingDidYouMeanForceNewAnchor = false;
 });
+
+// § New Map — opens the dialog that replaces the old always-visible top-
+// of-page search field (see ui-cleanup.md). Instructional text is set
+// fresh each time the dialog opens rather than being static markup, since
+// it depends on whether a current map exists right now (see the doc's
+// "The current map will be added to your history" addendum).
+function openNewMapDialog() {
+  newMapLocationInput.value = '';
+  newMapInstructions.textContent = hasAnchor
+    ? 'Search for a location. The new map will be centered there. The current map will be added to your history.'
+    : 'Search for a location. The new map will be centered there.';
+  newMapDialog.showModal();
+}
+
+newMapForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const query = newMapLocationInput.value.trim();
+  if (!query) return;
+  newMapDialog.close();
+  runSearch(query, true);
+});
+
+btnNewMapCancel.addEventListener('click', () => newMapDialog.close());
 
 // § POIs — fetches and displays a brand-new anchor, discarding whatever map
 // (and additional POIs) may already be showing. Used both for the very
@@ -1835,7 +1955,12 @@ function setCustomPoiFieldToCandidate(index) {
 // out in the edit field -- confirming with OK always places the new POI
 // at the cursor's own position (per an explicit user decision), never at
 // a suggested candidate's own (possibly slightly different) coordinates.
+// Guarded on hasAnchor here (rather than only via the New menu's own
+// visibility) since the p/a hotkeys below can reach this directly without
+// going through the menu at all -- there's no cursor position to drop a
+// pin at, or map to search on, before a first map exists.
 async function openCustomPoiDialog() {
+  if (!hasAnchor) return;
   const token = ++customPoiRequestToken;
   customPoiCandidates = [];
   customPoiCandidateIndex = -1;
@@ -1865,8 +1990,6 @@ async function openCustomPoiDialog() {
     customPoiStatus.textContent = 'No nearby places found.';
   }
 }
-
-btnDropPin.addEventListener('click', openCustomPoiDialog);
 
 customPoiNameInput.addEventListener('input', () => { customPoiUserTyped = true; });
 
@@ -1898,6 +2021,18 @@ customPoiForm.addEventListener('submit', (event) => {
   if (!name) return;
   customPoiDialog.close();
   addAdditionalPoi(name, cursorLat, cursorLon);
+});
+
+// § New Pin — the alternative to dropping a named pin at the cursor:
+// search for a location elsewhere on the map instead, using whatever text
+// is currently in the same name field. Runs the same additional-pin/
+// too-far logic as before this dialog existed (forceNewAnchor false) --
+// only New Map's own Search button always replaces the current map.
+btnCustomPoiSearch.addEventListener('click', () => {
+  const query = customPoiNameInput.value.trim();
+  if (!query) return;
+  customPoiDialog.close();
+  runSearch(query, false);
 });
 
 btnCustomPoiCancel.addEventListener('click', () => customPoiDialog.close());
@@ -3274,9 +3409,16 @@ function showAnchor(displayName, shortName, lat, lon, bbox, ways) {
   anchorHeading.textContent = displayName;
   anchorHeading.hidden = false;
 
+  // § New Map / New Pin — a one-time, one-way UI switch, same as hasAnchor
+  // itself: once a map exists, the standalone New Map button (the only
+  // entry point before this point) is replaced by the New menu (New Map +
+  // New Pin), and the "get started" instructions disappear to make more
+  // room for the map.
   if (!hasAnchor) {
     hasAnchor = true;
-    locationLabel.textContent = 'Enter another nearby address or location (optional):';
+    startInstructions.hidden = true;
+    btnNewMapStandalone.hidden = true;
+    newMenuContainer.hidden = false;
   }
 
   lastBbox = bbox;
@@ -3317,7 +3459,6 @@ function showAnchor(displayName, shortName, lat, lon, bbox, ways) {
   cursorSvg.hidden = false;
   scaleSelect.disabled = false;
   btnEditMap.removeAttribute('aria-disabled');
-  btnDropPin.disabled = false;
   btnDownloadSvg.removeAttribute('aria-disabled');
   // § Auto Simplification — resolved at the default scale before the one
   // refreshMap() call below, so even the very first view of a dense area
@@ -5270,8 +5411,17 @@ document.addEventListener('keydown', (event) => {
     return;
   }
 
-  // § Additional POIs — a opens the Custom POI ("Drop Pin") dialog.
-  if (event.key === 'a') {
+  // § New Map / New Pin — n opens New Map, always available. p opens New
+  // Pin (documented); a does the same thing but quietly, undocumented --
+  // kept for muscle memory from before this dialog was renamed from "Drop
+  // Pin" (see ui-cleanup.md). Both p and a no-op via openCustomPoiDialog's
+  // own hasAnchor guard before a first map exists.
+  if (event.key === 'n') {
+    event.preventDefault();
+    openNewMapDialog();
+    return;
+  }
+  if (event.key === 'p' || event.key === 'a') {
     event.preventDefault();
     openCustomPoiDialog();
     return;

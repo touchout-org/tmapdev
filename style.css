@@ -24,22 +24,12 @@ body {
   border-radius: 4px;
 }
 
-#search-form {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
+#start-instructions {
+  margin-bottom: 0.5rem;
+}
+
+#new-row {
   margin-bottom: 1rem;
-}
-
-#search-form label {
-  flex-basis: 100%;
-}
-
-#location-input {
-  flex: 1;
-  min-width: 200px;
-  padding: 0.4rem;
 }
 
 #anchor-row {
@@ -152,22 +142,26 @@ body {
   margin-bottom: 1rem;
 }
 
-#main-menu-container {
+#main-menu-container,
+#new-menu-container {
   position: relative;
 }
 
-#main-menu-button {
+#main-menu-button,
+#new-menu-button {
   display: flex;
   align-items: center;
   gap: 0.4rem;
 }
 
-#main-menu-button::after {
+#main-menu-button::after,
+#new-menu-button::after {
   content: "\25BE";
   font-size: 0.8em;
 }
 
-#main-menu {
+#main-menu,
+#new-menu {
   position: absolute;
   top: 100%;
   left: 0;
@@ -183,11 +177,13 @@ body {
   min-width: 12rem;
 }
 
-#main-menu li {
+#main-menu li,
+#new-menu li {
   margin: 0;
 }
 
-#main-menu button {
+#main-menu button,
+#new-menu button {
   display: block;
   width: 100%;
   text-align: left;
@@ -199,7 +195,9 @@ body {
 }
 
 #main-menu button:hover,
-#main-menu button:focus {
+#main-menu button:focus,
+#new-menu button:hover,
+#new-menu button:focus {
   background: Highlight;
   color: HighlightText;
   outline: none;
@@ -214,6 +212,7 @@ body {
 #poi-too-far-dialog,
 #edit-map-dialog,
 #custom-poi-dialog,
+#new-map-dialog,
 #save-map-dialog,
 #delete-saved-map-dialog,
 #did-you-mean-dialog {
@@ -394,14 +393,16 @@ th[aria-sort="descending"] .sort-header::after {
   padding-left: 1.5rem;
 }
 
-#custom-poi-form {
+#custom-poi-form,
+#new-map-form {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.5rem;
 }
 
-#custom-poi-name {
+#custom-poi-name,
+#new-map-location {
   width: 100%;
 }
 

@@ -61,8 +61,8 @@ Top to bottom, left to right:
 
 * At the very top of the page, before the H1: "Connect Dot Pad" button, then the **Main Menu** button. 
 * H1: "Welcome to DotTMAP"
-* Edit field: "Enter an address or location to get started:" [edit field], Search button. Once the anchor pin has been set, the label changes to "Enter another nearby address or location (optional)" — reflecting that the field is now for adding [additional pins](#additional-pins) rather than starting the map.
-* Below the search: H2 with the found address (anchor pin).
+* Before any map exists: instructional text ("Search for an address or location to get started.") followed by a standalone **New Map** button. Once an anchor pin exists, the instructional text disappears (to make more room for the map) and the button is replaced by the **New** menu — see [New Map / New Pin](#new-map--new-pin) below for both.
+* Below that: H2 with the found address (anchor pin).
 * Below the H2: the visual representation of the map.
 * Immediately below the map: a print version of the message display (live ARIA region).
 * Panning has no on-screen control group — see [Pan Behavior](#pan-behavior) for the two ways it's actually done.
@@ -108,7 +108,8 @@ The following table specifies the functions that can be accessed from the app or
 | Map Complexity: Major highways | `4` | none |
 | Cycle Map Complexity (decreasing, wraps) | `x` | dots 1+3+4+6 (`x`) |
 | Toggle cursor-only mode | `0` | dots 3+5+6 |
-| Open Custom Pin ("Drop Pin") dialog | `a` | none |
+| Open New Map dialog | `n` | none |
+| Open New Pin dialog | `p` | none |
 | Next Pin | `.` | dot 4 |
 | Previous Pin | `,` | dot 1 |
 | Next message chunk | none | dots 4+5+6 |
@@ -130,7 +131,7 @@ The 1-4 hotkeys jump straight to a Map Complexity level (see [Editing the Map](#
 
 **Cursor Solo Timeout** (see [Settings](#settings)) optionally reverts cursor-only mode back to "Features restored" on its own, a fixed number of seconds after it's turned on — so it doesn't have to be remembered and manually turned back off. Turning it off manually before the timeout elapses cancels the pending auto-revert, same as if the timeout feature didn't exist; the two paths (manual and automatic) end up in exactly the same state either way. Changing the Cursor Solo Timeout setting while cursor-only mode is already active and counting down takes effect immediately, per the Settings dialog's live-apply rule (see [Editing the Map](#editing-the-map)) — the pending countdown restarts under the new duration rather than waiting to expire under the old one, or is cancelled outright if the new value is None. Setting it to None disables the auto-revert entirely — manual toggle only, the original behavior before this setting existed. A brand-new anchor search always cancels any pending countdown, the same way it resets `cursorOnlyMode` itself, so a stale timer from a discarded map can never fire against a new one.
 
-`a` opens the Custom Pin dialog described under [Custom Pins](#custom-pins) — same as clicking "Drop Pin."
+`n` and `p` open the New Map and New Pin dialogs described under [New Map / New Pin](#new-map--new-pin) — `a` does the same thing as `p`, kept quietly for muscle memory from before this dialog was renamed, but not documented anywhere user-facing (this is the one exception to "every hotkey is documented" in this file, deliberate).
 
 Cursor rows use the same dot mapping as [Cursor and hit testing](#cursor-and-hit-testing). Toggle Labels Top and Bottom complete the set of 4 label positions, matching the left/right/top/bottom checkboxes in [Settings](#settings).
 
@@ -142,7 +143,7 @@ The `i`/`j`/`k`/`l` keyboard hotkeys, the `u`/`m`/`w`/`r` Dot Pad key combos, an
 
 Opens from the Main Menu — see [Main Menu](#main-menu). A single dialog covering every hotkey/Dot Pad key combo in the app, plus a brief description of each dialog that doesn't have its own hotkey.
 
-Sections, in order: Getting Started, Connecting the Dot Pad, Cursor Movement, Panning, Scale and Map Complexity, Pins, Braille Labels, Message Display, Street Abbreviation Key, Drop Pin, Display Preferences, Automatic Simplification, Map Customization, My Archives, Login / Logout, Release Notes. The seven hotkey-table sections (Cursor Movement, Panning, Scale and Map Complexity, Pins, Braille Labels, Message Display, Street Abbreviation Key) each use a 4-column table — Function, Hotkey, Dot Keys, Description — reproducing the same bindings as the [Command / hotkey mapping](#command--hotkey-mapping) table above, just grouped by topic with a plain-language description per row rather than one flat table (Street Abbreviation Key additionally has its own intro paragraph, same as Message Display). The remaining sections (Getting Started, Connecting the Dot Pad, Drop Pin, Display Preferences, Automatic Simplification, Map Customization, My Archives, Login / Logout, Release Notes) are brief prose only, no table — Connecting the Dot Pad additionally includes a numbered step-by-step (power on the device, press Connect Dot Pad, Shift-Tab twice to the browser's device picker, arrow down to the device, Enter to connect).
+Sections, in order: Getting Started, Connecting the Dot Pad, Cursor Movement, Panning, Scale and Map Complexity, Pins, Braille Labels, Message Display, Street Abbreviation Key, New Map, New Pin, Display Preferences, Automatic Simplification, Map Customization, My Archives, Login / Logout, Release Notes. The seven hotkey-table sections (Cursor Movement, Panning, Scale and Map Complexity, Pins, Braille Labels, Message Display, Street Abbreviation Key) each use a 4-column table — Function, Hotkey, Dot Keys, Description — reproducing the same bindings as the [Command / hotkey mapping](#command--hotkey-mapping) table above, just grouped by topic with a plain-language description per row rather than one flat table (Street Abbreviation Key additionally has its own intro paragraph, same as Message Display). The remaining sections (Getting Started, Connecting the Dot Pad, New Map, New Pin, Display Preferences, Automatic Simplification, Map Customization, My Archives, Login / Logout, Release Notes) are brief prose only, no table — Connecting the Dot Pad additionally includes a numbered step-by-step (power on the device, press Connect Dot Pad, Shift-Tab twice to the browser's device picker, arrow down to the device, Enter to connect).
 
 Content lives in its own file, `help-content.html`, fetched and injected into the dialog on first open (cached after that — later opens reuse the fetched copy rather than re-fetching), so the help text itself can be hand-edited without touching `index.html` or `app.js`. The file is a bare HTML fragment (`<h4>`/`<p>`/`<table>`/`<ol>` only, no `<html>`/`<head>`/`<body>` wrapper) meant to be dropped into the dialog's content container via `innerHTML`.
 
@@ -220,15 +221,23 @@ If a pan would leave the cursor outside the view on the edge opposite the pan di
 
 If a pan would leave a pin marker's footprint straddling the boundary between the map and an active label zone — rendering it half in the map, half in the zone — the pan target is nudged by a few pixels along the pan's own axis, just enough to clear the marker to whichever side (fully back inside the map, or fully past the boundary into the zone) is the smaller move. This only applies where a label zone is actually active on that edge; a marker running past the edge of the map on a side with no zone is left alone, since there's no zone for it to visibly invade there.
 
-## Pins
+## New Map / New Pin
 
-The location edit field at the top of the main window is used to begin the DotTMAP experience. Entering a location returns the anchor pin, generates a map centered on that point, and adds a solid 3x3 square marker to that pin (see [SVG Display Requirements](#svg-display-requirements)).
+Starting a map and adding a pin to one both go through short dialogs rather than an always-visible search field, so the main page stays uncluttered (see `ui-cleanup.md` for the design rationale). Before any map exists, a standalone **New Map** button is the sole entry point, next to instructional text ("Search for an address or location to get started."). Once an anchor pin exists, that text disappears and the button is replaced by a **New** menu — a WAI-ARIA "Actions Menu Button" (same pattern as [Main Menu](#main-menu)) — with two items, **New Map** and **New Pin**, arrow-key navigable.
+
+Hotkeys: `n` opens **New Map**, always available. `p` opens **New Pin** (documented); `a` does the same thing, kept quietly for muscle memory from before this dialog was renamed from "Drop Pin," but not documented anywhere user-facing. Neither `p` nor `a` do anything before a first map exists — there's no cursor position to drop a pin at yet. Neither dialog has a Dot Pad key combo: both require typing a search string, and text entry isn't possible from the device — the QWERTY keyboard is required either way, so there's nothing for a device-side combo to trigger.
+
+**New Map** takes a search string and always builds a fresh map centered on the result, discarding whatever map is currently showing (which is archived to Map History first, same as any other anchor replacement — see [Saving and exporting](#saving-and-exporting)) — unlike [Additional Pins](#additional-pins) below, there's no distance check and no "too far" dialog, since replacing the map is the whole point. Field label: "New map location:". Instructional text: "Search for a location. The new map will be centered there." — with "The current map will be added to your history." appended whenever a current map already exists. Buttons: Search (the default, Enter-triggered action) and Cancel.
+
+**New Pin** covers both ways of adding a pin to the current map — dropping a named pin at the cursor, or searching for a location elsewhere on the map — see [Custom Pins](#custom-pins) and [Additional Pins](#additional-pins) below for each. Field label: "Pin Name:". Instructional text: "Name a pin here, or search for a location elsewhere on this map." Buttons: Drop Pin Here (the default, Enter-triggered action — matches this dialog's behavior from before it covered searching too), Search, and Cancel.
+
+Entering a location via either dialog returns a pin (the anchor pin for New Map, an anchor or additional pin for New Pin depending on distance — see [Additional Pins](#additional-pins)) and adds a solid 3x3 square marker to it (see [SVG Display Requirements](#svg-display-requirements)).
 
 ### Additional Pins
 
-Additional pins can be added to a map by entering additional locations. Each new pin gets the same solid 3x3 square marker (see [SVG Display Requirements](#svg-display-requirements)).
+Additional pins can be added to a map via **New Pin**'s Search button (see above). Each new pin gets the same solid 3x3 square marker (see [SVG Display Requirements](#svg-display-requirements)).
 
-Pin names are run through [feature name compacting](#feature-name-compacting) once, at creation time — not left raw and compacted later at each display site. This applies to every way a pin can be created: additional pins added via search, Drop Pin custom pins, and the anchor pin itself. The compacted name is what's stored and reused everywhere the pin is later shown or spoken (the Pin list box, cursor hit-test messages, the initial "found it" announcement).
+Pin names are run through [feature name compacting](#feature-name-compacting) once, at creation time — not left raw and compacted later at each display site. This applies to every way a pin can be created: additional pins added via search, custom pins dropped at the cursor, and the anchor pin itself. The compacted name is what's stored and reused everywhere the pin is later shown or spoken (the Pin list box, cursor hit-test messages, the initial "found it" announcement).
 
 If a subsequent pin location is more than [threshold distance] away from the anchor pin, we get a true modal dialog that says "The new location is [distance] away from [anchor pin]. That's too far away for a single map." Buttons are "Show [new pin]" and "Cancel." If the user selects the new location, the old map is discarded and the new pin becomes the anchor with a new map generated around it.
 
@@ -242,7 +251,7 @@ The `.`/`,` hotkeys (dot 4 / dot 1 alone on the Dot Pad — see [command mapping
 
 ### Custom Pins
 
-A "Drop Pin" button next to the Pin list box (hotkey `a`) opens a "Custom Pin" dialog: a "Pin Name:" edit field plus OK and Cancel buttons. Pressing Enter (or clicking OK) adds a new pin at the cursor's current position, using the entered name; pressing Escape (or clicking Cancel) closes the dialog without adding anything. A blank name is rejected by the field's own required-field validation, without needing a submit.
+The **New Pin** dialog (see [above](#new-map--new-pin)) drops a custom, user-named pin at the cursor's current position when confirmed with "Drop Pin Here" (or Enter in the field) — the field's default action, unchanged from before this dialog also covered searching. Pressing Escape (or clicking Cancel) closes the dialog without adding anything. A blank name is rejected by the field's own required-field validation, without needing a submit.
 
 **Name suggestions from nearby Google data.** Opening the dialog immediately runs two Google lookups in parallel (this was Overpass originally, switched because the Overpass query was often slow and frequently returned nothing at all for this small a radius): a **Places API (New) nearby search** for named businesses/amenities within a real-world radius of the cursor's current position, plus a **Geocoder reverse lookup** at that same point for the nearest street address — needed because Places' nearby search returns businesses/pins but not bare street addresses. Either lookup failing alone just contributes nothing (the other's results still show); only both failing surfaces as an error. The radius is `CURSOR_HIT_RADIUS` (the same fixed-in-dots value used for street hit-testing, see [Cursor and hit testing](#cursor-and-hit-testing)) converted to real-world feet at the current Scale — it shrinks and grows with zoom, independent of which label zones happen to be active (the dot-to-feet ratio itself doesn't change with zone state, only the total visible area does). The reverse-geocoded address is the nearest address to the point, not necessarily one inside the radius — accepted, since "the closest address to the cursor" is exactly what a user dropping a pin at an unnamed spot wants.
 
