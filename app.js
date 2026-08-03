@@ -3808,24 +3808,74 @@ function convertOrdinalWords(name) {
   return name;
 }
 
-// § Feature name compacting — splits a name into { stem, type }: if the
-// name's trailing word is a recognized street-type word, type becomes its
-// standard abbreviation and stem is the name with that word removed;
-// otherwise type is empty and stem is the full name, unchanged.
-function splitStreetType(name) {
+// § Feature name compacting — compass-direction words to their standard
+// abbreviation, always with a trailing period (issue #18) -- unlike
+// STREET_TYPE_ABBREVIATIONS, where only "St." carries one. Applies
+// wherever a direction word appears in a name, leading or trailing, not
+// just a leading prefix -- see classifyNameWords below.
+const DIRECTION_WORD_ABBREVIATIONS = {
+  north: 'N.', northeast: 'NE.', east: 'E.', southeast: 'SE.',
+  south: 'S.', southwest: 'SW.', west: 'W.', northwest: 'NW.'
+};
+
+// § Feature name compacting — classifies every word of a name as
+// 'direction' (matches DIRECTION_WORD_ABBREVIATIONS, any position),
+// 'type' (the *first* word, scanning left to right, that matches
+// STREET_TYPE_ABBREVIATIONS -- only one word per name is ever
+// classified as the type, even if a same-shaped word happens to appear
+// again later), or 'stem' (everything else). A shared building block
+// (issue #18): compactFeatureName below consumes this to decide where
+// to split and what to abbreviate; anything else that needs to find "the
+// real descriptive word(s) in this name" (e.g. the label pipeline's own
+// stem-word lookup) is meant to consume the same classification rather
+// than re-deriving its own word scan.
+function classifyNameWords(name) {
   const words = name.trim().split(/\s+/);
-  const lastWordClean = words[words.length - 1].replace(/[^A-Za-z]/g, '').toLowerCase();
-  const abbreviation = STREET_TYPE_ABBREVIATIONS[lastWordClean];
-  if (!abbreviation) return { stem: name, type: '' };
-  return { stem: words.slice(0, -1).join(' '), type: abbreviation };
+  let typeIndex = -1;
+  const kinds = words.map((word, i) => {
+    const clean = word.replace(/[^A-Za-z]/g, '').toLowerCase();
+    if (DIRECTION_WORD_ABBREVIATIONS[clean]) return 'direction';
+    if (typeIndex === -1 && STREET_TYPE_ABBREVIATIONS[clean]) {
+      typeIndex = i;
+      return 'type';
+    }
+    return 'stem';
+  });
+  return { words, kinds, typeIndex };
 }
 
-// § Feature name compacting — top-level entry point: splits off a
-// recognized street-type suffix, then converts any ordinal number word
-// within what's left. Both steps degrade gracefully (see above), so a
-// name with neither passes through with stem = the full name, type = ''.
+// § Feature name compacting — top-level entry point (issue #18): every
+// direction word is abbreviated in place, wherever it sits in the name,
+// and the street-type word (if any) is found and abbreviated wherever it
+// sits too -- not just at the end, as splitStreetType used to assume.
+// The stem/type split happens right before the type word, so trailing
+// words (a trailing direction suffix) stay grouped with the type, not
+// the stem -- e.g. "South 21st Avenue Northeast" -> stem "S. 21st",
+// type "Ave NE.".
+//
+// If there's no type word at all, or the type word has no stem word
+// before it (e.g. "Avenue of the Americas", or a direction-prefixed
+// "Southeast Avenue of the Americas" -> "SE. Ave of the Americas") --
+// the type word is still abbreviated in place, but the whole thing is
+// returned as one undivided stem (type ''), since there's no meaningful
+// stem-prefix/type-suffix structure to split on there; the type word is
+// really just part of the proper name in that case.
 function compactFeatureName(name) {
-  const { stem, type } = splitStreetType(name);
+  const { words, kinds, typeIndex } = classifyNameWords(name);
+  const rendered = words.map((word, i) => {
+    const clean = word.replace(/[^A-Za-z]/g, '').toLowerCase();
+    if (kinds[i] === 'direction') return DIRECTION_WORD_ABBREVIATIONS[clean];
+    if (kinds[i] === 'type') return STREET_TYPE_ABBREVIATIONS[clean];
+    return word;
+  });
+
+  const hasStemBeforeType = typeIndex !== -1 && kinds.slice(0, typeIndex).includes('stem');
+  if (!hasStemBeforeType) {
+    return { stem: convertOrdinalWords(rendered.join(' ')), type: '' };
+  }
+
+  const stem = rendered.slice(0, typeIndex).join(' ');
+  const type = rendered.slice(typeIndex).join(' ');
   return { stem: convertOrdinalWords(stem), type };
 }
 
