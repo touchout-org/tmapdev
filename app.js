@@ -5653,6 +5653,18 @@ document.addEventListener('keydown', (event) => {
     return;
   }
 
+  // § New Map — n opens New Map, always available, same as the hotkeys
+  // above -- this has to sit before the "no map yet" gate below, not
+  // after it: n is specifically how you open your *first* map, so
+  // gating it on lastBbox already being set made it unreachable exactly
+  // when it's needed most (before any map exists, when the standalone
+  // New Map button is the only other way to reach it).
+  if (event.key === 'n') {
+    event.preventDefault();
+    openNewMapDialog();
+    return;
+  }
+
   if (!lastBbox) return;
 
   // § Editing the Map — 1-4 jump straight to the matching Map Complexity
@@ -5693,18 +5705,14 @@ document.addEventListener('keydown', (event) => {
     return;
   }
 
-  // § New Map / New Pin / Edit Pin — n opens New Map, always available. p
-  // opens New Pin or Edit Pin, whichever applies (documented); a does the
-  // same thing but quietly, undocumented -- kept for muscle memory from
-  // before this dialog was renamed from "Drop Pin" (see ui-cleanup.md).
-  // Both p and a no-op via openCustomPoiDialog's own hasAnchor guard
-  // before a first map exists (currentPoi() is null with no map either,
-  // so openNewOrEditPinDialog always falls through to it in that case).
-  if (event.key === 'n') {
-    event.preventDefault();
-    openNewMapDialog();
-    return;
-  }
+  // § New Pin / Edit Pin — p opens New Pin or Edit Pin, whichever applies
+  // (documented); a does the same thing but quietly, undocumented -- kept
+  // for muscle memory from before this dialog was renamed from "Drop Pin"
+  // (see ui-cleanup.md). Both correctly stay gated on lastBbox here,
+  // unlike n above -- there's no cursor position to drop or edit a pin at
+  // before a first map exists, so openCustomPoiDialog's own hasAnchor
+  // guard would just no-op anyway (currentPoi() is null with no map
+  // either, so openNewOrEditPinDialog always falls through to it).
   if (event.key === 'p' || event.key === 'a') {
     event.preventDefault();
     openNewOrEditPinDialog();
