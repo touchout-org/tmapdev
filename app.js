@@ -3899,50 +3899,62 @@ function compactedDisplayName(name) {
 // abbreviation."
 const LABEL_VOWELS = new Set(['a', 'e', 'i', 'o', 'u', 'A', 'E', 'I', 'O', 'U']);
 
-// § Label creation — a stem's leading compass-direction word, fully
-// spelled out, is replaced with its short form before the stem is joined
-// to the type. Only the ones map to a value containing a vowel (e/o) --
-// "ne" and "se" -- so those two are the ones that need protecting from
-// the vowel-stripping step below; the rest (n, e, s, w, sw, nw) already
-// survive it untouched since they either have no vowel or are the
-// single-vowel-letter case that step already exempts.
-const DIRECTION_ABBREVIATIONS = {
-  north: 'n', northeast: 'ne', east: 'e', southeast: 'se',
-  south: 's', southwest: 'sw', west: 'w', northwest: 'nw'
-};
-const DIRECTION_ABBREVIATION_TOKENS = new Set(Object.values(DIRECTION_ABBREVIATIONS));
+// § Label creation — direction-abbreviation words, in letters-only form,
+// derived from § Feature name compacting's own DIRECTION_WORD_ABBREVIATIONS
+// table rather than a separate list, so the two can never drift apart
+// (issue #18 already abbreviates every direction word, anywhere in the
+// name, before this pipeline ever sees it -- there's no separate
+// leading-word-only direction step here anymore). Used two ways below:
+// protecting a direction word's own vowel from being stripped (e.g.
+// "NE." losing its E would collapse it to the same thing as "N.",
+// losing the north/northeast distinction), and skipping past a leading
+// direction word to find a stem's *real* first word (see
+// firstNonDirectionWordIndex).
+const DIRECTION_ABBREVIATION_LETTERS = new Set(
+  Object.values(DIRECTION_WORD_ABBREVIATIONS).map((abbr) => abbr.replace(/[^A-Za-z]/g, '').toLowerCase())
+);
 
-// § Label creation — checks only the stem's first word (a street's own
-// descriptive name never legitimately contains a second, independent
-// direction word) against DIRECTION_ABBREVIATIONS; no match leaves the
-// stem untouched.
-function abbreviateLeadingDirection(stem) {
-  const words = stem.split(/\s+/);
-  const firstClean = words[0].replace(/[^A-Za-z]/g, '').toLowerCase();
-  const abbreviation = DIRECTION_ABBREVIATIONS[firstClean];
-  if (!abbreviation) return stem;
-  words[0] = abbreviation;
-  return words.join(' ');
-}
-
-// § Label creation, step 1 — strip vowels from each word of the name,
-// except when a word (once its own punctuation is stripped) is a single
-// vowel letter on its own, e.g. "A Street" or "E. 12th St.", or is one of
-// the direction-abbreviation tokens above ("ne"/"se") -- those words are
-// kept whole. Runs on the original whitespace-separated words, since word
-// boundaries still need to exist for this check; spaces themselves aren't
-// removed until the next step.
-function stripVowelsPreservingSingleLetterWords(name) {
+// § Label creation — strip vowels from each word of the name, except:
+// a word that (once its own punctuation is stripped) is a single
+// vowel letter on its own, e.g. "A Street"; a direction-abbreviation
+// word (see DIRECTION_ABBREVIATION_LETTERS above); or, when guardIndex
+// names a word position, that word's own first letter, vowel or not --
+// used to keep a stem's real leading letter visible (issue #8) without
+// also protecting some unrelated word's leading vowel (a type
+// abbreviation's, in particular -- see labelCandidateString below,
+// which only ever passes guardIndex for the stem, never the type).
+// Runs on the original whitespace-separated words, since word
+// boundaries still need to exist for this check; spaces themselves
+// aren't removed until the next step.
+function stripVowelsPreservingSingleLetterWords(name, guardIndex = -1) {
   return name
     .split(/\s+/)
     .filter(Boolean)
-    .map((word) => {
+    .map((word, i) => {
       const lettersOnly = word.replace(/[^A-Za-z]/g, '');
       if (lettersOnly.length === 1 && LABEL_VOWELS.has(lettersOnly)) return word;
-      if (DIRECTION_ABBREVIATION_TOKENS.has(lettersOnly.toLowerCase())) return word;
+      if (DIRECTION_ABBREVIATION_LETTERS.has(lettersOnly.toLowerCase())) return word;
+      if (i === guardIndex) {
+        return word[0] + [...word.slice(1)].filter((ch) => !LABEL_VOWELS.has(ch)).join('');
+      }
       return [...word].filter((ch) => !LABEL_VOWELS.has(ch)).join('');
     })
     .join(' ');
+}
+
+// § Label creation — the index (within a whitespace-split stem) of its
+// real first word, skipping past a leading direction abbreviation (e.g.
+// "N. Elm" -> index 1, "Elm" itself) that § Feature name compacting's
+// own direction compacting may have produced. Returns -1 for an empty
+// stem, or one that's nothing but direction word(s) (shouldn't happen
+// in practice -- a stem consisting solely of a direction word has
+// nothing else for this to find).
+function firstNonDirectionWordIndex(words) {
+  for (let i = 0; i < words.length; i++) {
+    const clean = words[i].replace(/[^A-Za-z]/g, '').toLowerCase();
+    if (!DIRECTION_ABBREVIATION_LETTERS.has(clean)) return i;
+  }
+  return -1;
 }
 
 // § Label creation — collapses every run of 2+ identical consecutive
@@ -3963,23 +3975,32 @@ function compressRepeatedLetters(s) {
   return result;
 }
 
-// § Label creation, steps 1-3 — the full candidate string a street's label
-// is drawn from: the name is compacted first (see Feature name
-// compacting), the stem's leading direction word (if any) is abbreviated,
-// stem and type are concatenated directly (not space-joined -- any
-// doubled letter at that boundary is meant to collapse, not be
-// protected), then vowels are stripped (per the single-letter-word /
-// direction-token exceptions), every space and punctuation character is
-// removed, repeated letters are compressed, and the result is lowercased.
+// § Label creation — the full candidate string a street's label is
+// drawn from: the name is compacted first (see § Feature name
+// compacting -- direction words and the street type are already
+// abbreviated there, wherever they sit in the name). Stem and type are
+// then vowel-stripped *independently*, not glued together first (issue
+// #8) -- the stem's real first word (see firstNonDirectionWordIndex)
+// always keeps its own leading letter, vowel or not, so "Elm Street"
+// keeps its E; the type never gets this guard, so "Avenue"'s abbreviated
+// "Ave" still loses its A as before ("Elm Avenue" -> "elmv", not
+// "lmv" and not "elmav" -- only Elm's letter is protected). Only after
+// each is independently stripped are they concatenated directly (not
+// space-joined -- any doubled letter at that boundary is meant to
+// collapse, not be protected), then every space and punctuation
+// character is removed, repeated letters are compressed, and the result
+// is lowercased.
 function labelCandidateString(name) {
   const { stem, type } = compactFeatureName(name);
-  const candidate = abbreviateLeadingDirection(stem) + type;
-  const vowelsStripped = stripVowelsPreservingSingleLetterWords(candidate);
-  const cleaned = vowelsStripped.replace(/[^A-Za-z0-9]/g, '');
+  const stemWords = stem.split(/\s+/).filter(Boolean);
+  const guardIndex = firstNonDirectionWordIndex(stemWords);
+  const strippedStem = stripVowelsPreservingSingleLetterWords(stem, guardIndex);
+  const strippedType = stripVowelsPreservingSingleLetterWords(type);
+  const cleaned = (strippedStem + strippedType).replace(/[^A-Za-z0-9]/g, '');
   return compressRepeatedLetters(cleaned).toLowerCase();
 }
 
-// § Label creation, steps 4-7 — assigns every street name a unique
+// § Label creation — assigns every street name a unique
 // 3-character label. Processes names in the given order (alphabetical, so
 // output is stable/reproducible run to run) -- uniqueness resolution is
 // first-come-first-served, so earlier names in the list get first claim
@@ -4057,7 +4078,7 @@ function findUniqueDigitPairLabel(candidate, digitAnchor, start, end, used) {
   return null;
 }
 
-// § Label creation, steps 4-5 — try the candidate string's first three
+// § Label creation — try the candidate string's first three
 // characters; on collision, keep the first two characters fixed and walk
 // only the third character forward through the rest of the candidate
 // string, rather than sliding the whole 3-character window. This keeps
@@ -4087,13 +4108,14 @@ function padLabel(s) {
   return (s + '---').slice(0, 3);
 }
 
-// § Label creation, step 5b — every prefix-anchored window (step 5)
-// collided too, so try a different anchor: keep the candidate's first and
-// last characters fixed (the label's 1st and 3rd positions), and walk the
-// label's middle position through the candidate string's interior
-// characters. A different combinatorial space than step 5 (which only
-// ever anchors the first two characters), so it can still find a unique
-// label for a longer candidate string even after step 5 is exhausted.
+// § Label creation — every prefix-anchored window (see findUniqueLabel
+// above) collided too, so try a different anchor: keep the candidate's
+// first and last characters fixed (the label's 1st and 3rd positions),
+// and walk the label's middle position through the candidate string's
+// interior characters. A different combinatorial space than
+// findUniqueLabel (which only ever anchors the first two characters),
+// so it can still find a unique label for a longer candidate string
+// even after that one is exhausted.
 // Returns null if that's exhausted too (or the candidate is too short to
 // have a distinct first/middle/last), so the caller can fall through to
 // the digit-suffix step.
@@ -4108,8 +4130,8 @@ function findUniqueLabelWalkingMiddle(candidate, used) {
   return null;
 }
 
-// § Label creation, step 7 — steps 5 and 6 both collided on every
-// attempt, so fall back to the candidate's first two characters (padded
+// § Label creation — every prefix- and middle-anchored attempt above
+// collided too, so fall back to the candidate's first two characters (padded
 // with a dash if the candidate itself is shorter than 2 characters) plus
 // a single trailing digit, trying 0-9 in order until one is unique.
 function findUniqueDigitSuffix(candidate, used) {
