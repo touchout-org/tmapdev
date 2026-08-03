@@ -377,6 +377,12 @@ const customPoiForm = document.getElementById('custom-poi-form');
 const customPoiNameInput = document.getElementById('custom-poi-name');
 const btnCustomPoiSearch = document.getElementById('btn-custom-poi-search');
 const btnCustomPoiCancel = document.getElementById('btn-custom-poi-cancel');
+const editPinDialog = document.getElementById('edit-pin-dialog');
+const editPinInstructions = document.getElementById('edit-pin-instructions');
+const editPinForm = document.getElementById('edit-pin-form');
+const editPinNameInput = document.getElementById('edit-pin-name');
+const btnEditPinCancel = document.getElementById('btn-edit-pin-cancel');
+const btnEditPinDelete = document.getElementById('btn-edit-pin-delete');
 const btnEditMap = document.getElementById('menu-customize-map');
 const editMapDialog = document.getElementById('edit-map-dialog');
 const editMapPoisList = document.getElementById('edit-map-pois-list');
@@ -1170,17 +1176,37 @@ document.addEventListener('click', (event) => {
   }
 });
 
-// § New Map / New Pin — the "New" menu, same WAI-ARIA Actions Menu Button
-// pattern as Main Menu above (see openMainMenu et al.), just a second,
-// independent instance for its own two items. Only shown once a current
-// map exists (see showAnchor's one-time UI switch below) -- before that,
-// btnNewMapStandalone is the sole entry point, since New Pin has no
-// current map to add a pin to yet.
+// § New Map / New Pin / Edit Pin — the "Map Menu" (renamed from "New" once
+// its second item could be Edit Pin as well as New Pin -- "New" stopped
+// describing it accurately), same WAI-ARIA Actions Menu Button pattern as
+// Main Menu above (see openMainMenu et al.), just a second, independent
+// instance for its own two items. Only shown once a current map exists
+// (see showAnchor's one-time UI switch below) -- before that,
+// btnNewMapStandalone is the sole entry point, since there's no current
+// map to add or edit a pin on yet. The `new-menu-*` id/variable names
+// weren't renamed to match -- internal identifiers, not user-facing text,
+// same convention as the POI/Pin rename.
 function newMenuItems() {
   return Array.from(newMenu.querySelectorAll('[role="menuitem"]')).filter((item) => !item.hidden);
 }
 
+// § Edit Pin — the Map Menu's second item is New Pin or Edit Pin depending
+// on whether the cursor is currently on a pin, re-evaluated every time the
+// menu opens (not kept live while it's closed -- nothing needs to react to
+// cursor movement until the menu is actually opened again).
+function syncMapMenuPinItem() {
+  const poi = currentPoi();
+  if (poi) {
+    menuNewPin.textContent = 'Edit Pin';
+    menuNewPin.title = 'Edit the current pin.';
+  } else {
+    menuNewPin.textContent = 'New Pin';
+    menuNewPin.title = 'Mark a new location on this map.';
+  }
+}
+
 function openNewMenu(focusIndex) {
+  syncMapMenuPinItem();
   newMenu.hidden = false;
   newMenuButton.setAttribute('aria-expanded', 'true');
   focusNewMenuItem(focusIndex);
@@ -1257,7 +1283,7 @@ menuNewMap.addEventListener('click', () => {
 
 menuNewPin.addEventListener('click', () => {
   closeNewMenu({ focusButton: true });
-  openCustomPoiDialog();
+  openNewOrEditPinDialog();
 });
 
 // § Settings — every control in this dialog is live-apply now (a change
@@ -2048,6 +2074,83 @@ btnCustomPoiSearch.addEventListener('click', () => {
 });
 
 btnCustomPoiCancel.addEventListener('click', () => customPoiDialog.close());
+
+// § Edit Pin — currently-open target, set by openEditPinDialog and read by
+// the form/Delete handlers below; { isAnchor, index, name, lat, lon }, same
+// shape currentPoi() returns.
+let editPinTarget = null;
+
+// § Edit Pin — replaces New Pin whenever the cursor is already on a pin:
+// New Pin and Edit Pin are never available at the same time (there's
+// either a pin under the cursor or there isn't), so p/a and the Map
+// Menu's pin item can safely share one dispatcher between the two dialogs.
+function openNewOrEditPinDialog() {
+  const poi = currentPoi();
+  if (poi) {
+    openEditPinDialog(poi);
+  } else {
+    openCustomPoiDialog();
+  }
+}
+
+// § Edit Pin — guarded on its own open state the same way openHelpDialog()
+// is: the OK/Cancel/Delete buttons aren't form controls, so if focus has
+// moved off the name input (which normally blocks p/a as a form control)
+// onto one of them, a repeat p/a press would otherwise call showModal() on
+// an already-open dialog and throw.
+function openEditPinDialog(poi) {
+  if (editPinDialog.open) return;
+  editPinTarget = poi;
+  editPinNameInput.value = poi.name;
+  editPinInstructions.textContent = poi.isAnchor
+    ? "To update the pin name, press OK, or press Cancel to leave it unchanged."
+    : "To update the pin name, press OK, or press Cancel to leave it unchanged. Pressing 'Delete Pin' will permanently remove this pin from the map.";
+  btnEditPinDelete.hidden = poi.isAnchor;
+  editPinDialog.showModal();
+}
+
+// § Edit Pin — OK: renames the anchor or the target additionalPois entry.
+// Compacted the same way every other pin name is at creation time (see
+// addAdditionalPoi/showAnchor) so a freeform name like "Home" passes
+// through unchanged while a real address-like name still gets compacted.
+// Renaming the anchor also updates the H2 heading and tab title (Josh's
+// call): the pin name is the single source of truth for how the anchor is
+// presented everywhere, not just in the pin-navigation list.
+editPinForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  const newName = compactedDisplayName(editPinNameInput.value.trim());
+  if (!newName) return;
+  editPinDialog.close();
+  if (editPinTarget.isAnchor) {
+    lastAnchorName = newName;
+    anchorHeading.textContent = newName;
+    document.title = `DotTMAP — ${newName}`;
+  } else {
+    additionalPois[editPinTarget.index].name = newName;
+  }
+  renderPoiList();
+  refreshMap();
+  saveCurrentMapLocally();
+  setMessage(`${newName} renamed.`);
+});
+
+btnEditPinCancel.addEventListener('click', () => editPinDialog.close());
+
+// § Edit Pin — Delete Pin: permanently removes the target from
+// additionalPois (never shown for the anchor -- btnEditPinDelete stays
+// hidden in that case, see openEditPinDialog). Deliberately different
+// from Edit Map's pin removal, which only hides a pin (reversible via
+// Hidden Features) -- this splices it out entirely, per Josh's explicit
+// "permanently remove" wording for this dialog.
+btnEditPinDelete.addEventListener('click', () => {
+  const { index, name } = editPinTarget;
+  additionalPois.splice(index, 1);
+  editPinDialog.close();
+  renderPoiList();
+  refreshMap();
+  saveCurrentMapLocally();
+  setMessage(`${name} deleted.`);
+});
 
 // § POIs — the anchor is always the first entry (value "anchor"), followed
 // by every additional POI (value = its index into additionalPois).
@@ -4572,6 +4675,35 @@ function currentObjectNames() {
   return stems.join(' and ');
 }
 
+// § New Pin / Edit Pin — the POI-only counterpart to currentObjectNames()'s
+// hit-test loop above: returns the single pin under the cursor (anchor or
+// additional), or null if none. Used to decide whether p/a/the Map Menu's
+// pin item open New Pin or Edit Pin (see openNewOrEditPinDialog) -- pins
+// are far enough apart in practice that "first hit wins" never matters,
+// but checking the anchor before additionalPois (same order as
+// renderPoiList/allPois) makes it deterministic if it ever did. Same
+// hidden-via-Edit-Map and cursor-only-mode exclusions as visiblePois().
+function currentPoi() {
+  const viewportBbox = getViewportBbox();
+  const cursorGrid = cursorGridPosition(viewportBbox);
+  if (!cursorGrid || cursorOnlyMode) return null;
+  const isUnderCursor = (lat, lon) => {
+    const p = projectToGrid(lat, lon, viewportBbox);
+    return Math.hypot(cursorGrid.x - p.x, cursorGrid.y - p.y) <= CURSOR_HIT_RADIUS;
+  };
+  if (lastAnchorName && !hiddenPoiNames.has(lastAnchorName) && isUnderCursor(lastAnchorLat, lastAnchorLon)) {
+    return { isAnchor: true, index: -1, name: lastAnchorName, lat: lastAnchorLat, lon: lastAnchorLon };
+  }
+  for (let i = 0; i < additionalPois.length; i++) {
+    const poi = additionalPois[i];
+    if (hiddenPoiNames.has(poi.name)) continue;
+    if (isUnderCursor(poi.lat, poi.lon)) {
+      return { isAnchor: false, index: i, name: poi.name, lat: poi.lat, lon: poi.lon };
+    }
+  }
+  return null;
+}
+
 // § POIs — the anchor plus every additional POI, as a flat list of
 // { name, lat, lon }.
 function allPois() {
@@ -5438,11 +5570,13 @@ document.addEventListener('keydown', (event) => {
     return;
   }
 
-  // § New Map / New Pin — n opens New Map, always available. p opens New
-  // Pin (documented); a does the same thing but quietly, undocumented --
-  // kept for muscle memory from before this dialog was renamed from "Drop
-  // Pin" (see ui-cleanup.md). Both p and a no-op via openCustomPoiDialog's
-  // own hasAnchor guard before a first map exists.
+  // § New Map / New Pin / Edit Pin — n opens New Map, always available. p
+  // opens New Pin or Edit Pin, whichever applies (documented); a does the
+  // same thing but quietly, undocumented -- kept for muscle memory from
+  // before this dialog was renamed from "Drop Pin" (see ui-cleanup.md).
+  // Both p and a no-op via openCustomPoiDialog's own hasAnchor guard
+  // before a first map exists (currentPoi() is null with no map either,
+  // so openNewOrEditPinDialog always falls through to it in that case).
   if (event.key === 'n') {
     event.preventDefault();
     openNewMapDialog();
@@ -5450,7 +5584,7 @@ document.addEventListener('keydown', (event) => {
   }
   if (event.key === 'p' || event.key === 'a') {
     event.preventDefault();
-    openCustomPoiDialog();
+    openNewOrEditPinDialog();
     return;
   }
 

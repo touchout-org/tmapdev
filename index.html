@@ -37,7 +37,7 @@
   <div id="new-row">
     <button type="button" id="btn-new-map-standalone" title="Search: Open a map centered on a new location.">New Map</button>
     <div id="new-menu-container" hidden>
-      <button type="button" id="new-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="new-menu" title="Create a new map or add a pin.">New</button>
+      <button type="button" id="new-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="new-menu" title="Create a new map, add a pin, or edit the current pin.">Map Menu</button>
       <ul id="new-menu" role="menu" aria-labelledby="new-menu-button" hidden>
         <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-new-map" title="Search: Open a map centered on a new location.">New Map</button></li>
         <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-new-pin" title="Mark a new location on this map.">New Pin</button></li>
@@ -98,6 +98,18 @@
       <button id="btn-custom-poi-ok" type="submit" title="Enter a name and drop it">Drop Pin Here</button>
       <button id="btn-custom-poi-search" type="button" title="Search: Put a pin on this map at a new location">Search</button>
       <button id="btn-custom-poi-cancel" type="button">Cancel</button>
+    </form>
+  </dialog>
+
+  <dialog id="edit-pin-dialog" aria-labelledby="edit-pin-heading">
+    <h3 id="edit-pin-heading">Edit Pin</h3>
+    <p id="edit-pin-instructions"></p>
+    <form id="edit-pin-form">
+      <label for="edit-pin-name">Pin Name:</label>
+      <input type="text" id="edit-pin-name" name="pin-name" autocomplete="off" required>
+      <button id="btn-edit-pin-ok" type="submit" title="Update pin name">OK</button>
+      <button id="btn-edit-pin-cancel" type="button" title="Leave pin name unchanged">Cancel</button>
+      <button id="btn-edit-pin-delete" type="button" title="Permanently remove pin from map">Delete Pin</button>
     </form>
   </dialog>
 
