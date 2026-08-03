@@ -1067,6 +1067,7 @@ function setScaleIndex(newIndex) {
   if (newIndex === scaleIndex) return;
   scaleIndex = newIndex;
   scaleSelect.value = String(scaleIndex);
+  reclampViewportCenter();
   // § Auto Simplification — resolved against the new scale (getViewportBbox
   // already reflects scaleIndex's new value at this point) before the one
   // refreshMap() call below, so the map never flashes an intermediate
@@ -1324,6 +1325,7 @@ settingsUnitsSelect.addEventListener('change', () => {
   unitSystem = settingsUnitsSelect.value;
   savePersistedSettings();
   refreshScaleOptions();
+  reclampViewportCenter();
   // § Auto Simplification — a Units switch re-renders the map at a new
   // effective real-world footprint for the same scale index (see above),
   // which can change density even though scaleIndex itself didn't move.
@@ -1447,6 +1449,7 @@ function setLabelZone(zone, value) {
   labelZones[zone] = value;
   savePersistedSettings();
   setMessage(`${zone} labels ${value ? 'on' : 'off'}`);
+  reclampViewportCenter();
   refreshMap();
 }
 
@@ -5092,6 +5095,38 @@ function nudgeToAvoidPoiClipping(direction, lat, lon) {
   return { lat: lat - feetToLatDelta(shiftFt), lon };
 }
 
+// § Pan Behavior — clamps a candidate viewport center to the map's actual
+// edge, for whatever the viewport's real-world size currently is (see
+// viewportSizeFeet -- depends on active label zones, scale, and units).
+// Shared by panMap (clamping a stepped pan target) and
+// reclampViewportCenter below (clamping the *current* center back into
+// range after something other than a pan changes the effective viewport
+// size out from under it).
+function clampToViewportBounds(lat, lon) {
+  const { widthFt, heightFt } = viewportSizeFeet();
+  const halfLat = feetToLatDelta(heightFt / 2);
+  const halfLon = feetToLonDelta(widthFt / 2, lat);
+  return {
+    lat: clamp(lat, lastBbox.south + halfLat, lastBbox.north - halfLat),
+    lon: clamp(lon, lastBbox.west + halfLon, lastBbox.east - halfLon)
+  };
+}
+
+// § Pan Behavior — re-clamps the current viewport center after something
+// changes the effective viewport size without going through panMap: a
+// label zone toggling, a scale change, a Units switch (see call sites).
+// Without this, the center can be left sitting in a position that was
+// only ever valid for the *previous* size -- silently invalid until
+// whatever pan happens to run next "corrects" it as an unrelated side
+// effect (issue #16: toggling a label zone off after panning to the edge
+// with it on left the center too far west for the now-wider viewport;
+// the next west pan clamped it back east to fix that, which looked
+// exactly like the pan itself going the wrong direction).
+function reclampViewportCenter() {
+  if (!lastBbox || viewportCenterLat === null) return;
+  ({ lat: viewportCenterLat, lon: viewportCenterLon } = clampToViewportBounds(viewportCenterLat, viewportCenterLon));
+}
+
 function panMap(direction) {
   if (!lastBbox || viewportCenterLat === null) return;
   const { widthFt, heightFt } = viewportSizeFeet();
@@ -5107,23 +5142,31 @@ function panMap(direction) {
 
   ({ lat: newLat, lon: newLon } = nudgeToAvoidPoiClipping(direction, newLat, newLon));
 
-  const halfLat = feetToLatDelta(heightFt / 2);
-  const halfLon = feetToLonDelta(widthFt / 2, newLat);
-  const exceedsEdge =
-    newLat + halfLat > lastBbox.north + 1e-9 ||
-    newLat - halfLat < lastBbox.south - 1e-9 ||
-    newLon + halfLon > lastBbox.east + 1e-9 ||
-    newLon - halfLon < lastBbox.west - 1e-9;
+  // § Pan Behavior — clamp to the map's actual edge instead of rejecting
+  // the whole pan outright when the full panAmountFraction step doesn't
+  // fit (issue #16): a pan that would overshoot the fetched data now goes
+  // exactly as far as it can, rather than refusing to move at all just
+  // short of the edge. "Edge of Map" now means what it says -- the
+  // clamped result is genuinely unchanged from the current position,
+  // i.e. there's nowhere left to go, not just not enough room for one
+  // full step.
+  ({ lat: newLat, lon: newLon } = clampToViewportBounds(newLat, newLon));
 
-  if (exceedsEdge) {
+  if (newLat === viewportCenterLat && newLon === viewportCenterLon) {
     setMessage('Edge of Map');
     playEdgeTone();
     return;
   }
 
+  // carryCursorPastTrailingEdge assumes the viewport moved by exactly
+  // latStep/lonStep -- true for a full, unclamped pan, but a clamped one
+  // moves by less, so pass the actual distance moved instead.
+  const actualLatStep = Math.abs(newLat - viewportCenterLat);
+  const actualLonStep = Math.abs(newLon - viewportCenterLon);
+
   viewportCenterLat = newLat;
   viewportCenterLon = newLon;
-  carryCursorPastTrailingEdge(direction, latStep, lonStep);
+  carryCursorPastTrailingEdge(direction, actualLatStep, actualLonStep);
   refreshMap();
   announcePositionRelativeToAnchor();
 }
