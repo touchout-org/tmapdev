@@ -836,15 +836,26 @@ function capSignsForWord(word) {
 // alphabetic wordsigns (see UEB_WORDSIGN_RULES), that plain cell is the
 // *same* dot pattern as the wordsign's whole-word contraction (that's
 // the whole mnemonic behind wordsigns: letter b's own shape doubles as
-// "but", etc.). A capitalized standalone letter is ambiguous with that
-// wordsign unless marked otherwise -- the letter sign says "this cell
-// means the letter", not the word. Derived from the wordsign table
-// itself (which letters' shapes are actually reused) rather than a
-// separate hand-maintained list, so the two can't drift apart. A few
-// letters have no wordsign assigned to their shape at all -- a, i, o,
-// each already a genuine one-letter English word on its own ("a", "I",
-// "o") -- so a standalone capital A/I/O is never ambiguous with
-// anything and never needs the letter sign.
+// "but", etc.). Note this fallback never actually goes through the
+// wordsign *rule* -- that only matches a wordsign's full spelling (the
+// literal word "but", three letters); a standalone single letter is
+// always shorter than every wordsign's own text, so it can never match
+// one. The plain-letter fallback just happens to produce the identical
+// cell, since that's how wordsigns are defined in the first place.
+// Needed regardless of capitalization -- this app's real content never
+// has a standalone single letter meaning the actual grammatical word
+// (that always appears fully spelled out, and gets contracted
+// correctly by the normal wordsign rule); every standalone single
+// letter it produces is a literal letter (e.g. a lettered grid street,
+// "B Street"), so the letter sign is always correct there, capitalized
+// or not -- capitalized letters additionally get the capital sign right
+// after it. Derived from the wordsign table itself (which letters'
+// shapes are actually reused) rather than a separate hand-maintained
+// list, so the two can't drift apart. A few letters have no wordsign
+// assigned to their shape at all -- a, i, o, each already a genuine
+// one-letter English word on its own ("a", "I", "o") -- so a standalone
+// A/I/O, either case, is never ambiguous with anything and never needs
+// the letter sign.
 const UEB_LETTERSIGN = 48; // dots 5,6
 const WORDSIGN_CELL_VALUES = new Set(UEB_WORDSIGN_RULES.map((rule) => rule.cells[0]));
 
@@ -929,10 +940,17 @@ export function translateGrade2(text) {
     if (token.type === 'word') {
       const word = token.text;
       const letterCell = word.length === 1 ? UEB_LETTERS[word.toLowerCase()] : null;
-      if (letterCell !== null && isUpper(word[0]) && WORDSIGN_CELL_VALUES.has(letterCell)) {
-        // standalone capital letter that would otherwise misread as the
-        // wordsign sharing its shape -- see UEB_LETTERSIGN above.
-        cells.push(UEB_LETTERSIGN, UEB_CAPSIGN, letterCell);
+      if (letterCell !== null && WORDSIGN_CELL_VALUES.has(letterCell)) {
+        // standalone letter whose shape is also a wordsign -- always
+        // needs the letter sign, capitalized or not (see UEB_LETTERSIGN
+        // above: this never actually goes through the wordsign *rule*,
+        // which only matches a wordsign's full spelling, e.g. "but"
+        // spelled out -- it's the plain-letter fallback, which happens
+        // to produce the identical cell only because a wordsign reuses
+        // its letter's own shape). The capital sign is still added only
+        // when the letter was actually capitalized.
+        const prefix = isUpper(word[0]) ? [UEB_LETTERSIGN, UEB_CAPSIGN] : [UEB_LETTERSIGN];
+        cells.push(...prefix, letterCell);
       } else {
         cells.push(...capSignsForWord(word), ...translateWordGrade2(word));
       }
