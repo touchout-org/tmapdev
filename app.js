@@ -1659,13 +1659,21 @@ async function proceedWithPlace(place, query, forceNewAnchor) {
   }
 
   // § Additional POIs — a location entered after the anchor exists either
-  // joins the current map (within the POI distance threshold) or requires
-  // discarding it for a new one, depending on distance from the anchor.
+  // joins the current map or requires discarding it for a new one,
+  // depending on whether it actually falls within the fetched data's
+  // boundary (lastBbox) -- not a separate circular distance threshold,
+  // which used to reject a location sitting in one of the fetched
+  // square's corners even though its data was already fetched and
+  // rendered (issue #15; see squareBoundingBox, which sizes that square's
+  // half-side to this same POI_DISTANCE_THRESHOLD_MILES -- a circle of
+  // that radius is inscribed in the square, so this hit-test can only
+  // ever admit more locations than the old check did, never fewer).
   const { eastFt, northFt } = feetOffsetFrom(lat, lon, lastAnchorLat, lastAnchorLon);
   const distFt = Math.hypot(eastFt, northFt);
-  const thresholdFt = (POI_DISTANCE_THRESHOLD_MILES * MILES_TO_METERS) / FEET_TO_METERS;
+  const withinFetchedBoundary =
+    lat >= lastBbox.south && lat <= lastBbox.north && lon >= lastBbox.west && lon <= lastBbox.east;
 
-  if (distFt > thresholdFt) {
+  if (!withinFetchedBoundary) {
     promptTooFarPoi(displayName, shortName, lat, lon, distFt, query, country);
     return;
   }
