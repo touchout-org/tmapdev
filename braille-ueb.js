@@ -90,6 +90,39 @@ export const UEB_WORDSIGN_RULES = [
   { text: "you", position: "alphabetic-wordsign", cells: [61] },
 ];
 
+// § Grade 2 — the "dot 5" lower signs: two-cell whole/part-word
+// contractions, dot 5 alone (16) followed by a single letter's own
+// plain cell. "always" position -- unlike the alphabetic wordsigns
+// above, these fire wherever the text occurs, not just as a standalone
+// whole word (e.g. "father" contracts the same way inside "cofather"
+// as it does alone). Confirmed against the pre-existing "cofather"/
+// "coname"/etc. entries already extracted into UEB_G2_RULES below,
+// which already use these exact two-cell sequences for their "father"/
+// "name" portions -- e.g. "cofather" = c, o, [dot5, f].
+//
+// dot5+k is "know", not "knowledge" -- that's the single-letter
+// alphabetic wordsign above (cells: [5], whole-word only). No collision
+// between the two: different text, so no priority question to resolve.
+const UEB_DOT5_SIGN_RULES = [
+  { text: "day", position: "always", cells: [16, 25] },
+  { text: "ever", position: "always", cells: [16, 17] },
+  { text: "father", position: "always", cells: [16, 11] },
+  { text: "here", position: "always", cells: [16, 19] },
+  { text: "know", position: "always", cells: [16, 5] },
+  { text: "lord", position: "always", cells: [16, 7] },
+  { text: "mother", position: "always", cells: [16, 13] },
+  { text: "name", position: "always", cells: [16, 29] },
+  { text: "one", position: "always", cells: [16, 21] },
+  { text: "part", position: "always", cells: [16, 15] },
+  { text: "question", position: "always", cells: [16, 31] },
+  { text: "right", position: "always", cells: [16, 23] },
+  { text: "some", position: "always", cells: [16, 14] },
+  { text: "time", position: "always", cells: [16, 30] },
+  { text: "under", position: "always", cells: [16, 37] },
+  { text: "work", position: "always", cells: [16, 58] },
+  { text: "young", position: "always", cells: [16, 61] },
+];
+
 // § Grade 2 — the 640 contractions expressible as a pure word-position
 // rule (opcodes always/word/begword/endword/midword/midendword/sufword),
 // extracted from liblouis's en-ueb-g2.ctb. cells: null means "use Grade 1
@@ -741,6 +774,7 @@ export const UEB_G2_RULES = [
   { text: "ing", position: "midendword", cells: [44] },
   { text: "in", position: "always", cells: [20] },
   { text: "bb", position: "midword", cells: [6] },
+  { text: "ea", position: "midword", cells: [2] },
   { text: "en", position: "always", cells: [34] },
   { text: "there", position: "always", cells: [16, 46] },
   { text: "those", position: "always", cells: [24, 57] },
@@ -891,7 +925,7 @@ function positionOk(position, start, len, n) {
 }
 
 const RULES_BY_TEXT = new Map();
-for (const rule of [...UEB_G2_RULES, ...UEB_WORDSIGN_RULES]) {
+for (const rule of [...UEB_G2_RULES, ...UEB_WORDSIGN_RULES, ...UEB_DOT5_SIGN_RULES]) {
   if (!RULES_BY_TEXT.has(rule.text)) RULES_BY_TEXT.set(rule.text, []);
   RULES_BY_TEXT.get(rule.text).push(rule);
 }
