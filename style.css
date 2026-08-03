@@ -50,12 +50,51 @@ body {
   border: 1px solid #999;
   flex: 1;
   min-width: 0;
+  position: relative;
+}
+
+/* § Additional Pins — mouse-only affordance replacing the on-screen Pins
+   list box (see #poi-list-container, now hidden): a pin icon at the
+   bottom center of the map frame that steps forward through the same
+   pin list as the ./, hotkeys and dot4/dot1 (see navigatePoiList in
+   app.js). One direction only -- sighted mouse users don't need reverse,
+   unlike the hotkeys/dot-keys this replaces for keyboard/AT users.
+   aria-hidden + tabindex="-1" since screen-reader users already have
+   the hotkeys/dot keys; this is not an alternate path for them. */
+#btn-goto-pin {
+  position: absolute;
+  bottom: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0.35rem;
+  border: none;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+#btn-goto-pin:hover {
+  opacity: 1;
+}
+
+#btn-goto-pin svg {
+  width: 100%;
+  height: 100%;
+  fill: #1a1a1a;
 }
 
 /* § POIs — the list box of additional POIs, to the left of the map. Fixed
    width on the select itself (not just the container) since a <select>
    otherwise sizes to its longest option's full text, which can badly
    overflow the page for a long address. */
+#poi-list-container[hidden] {
+  display: none;
+}
+
 #poi-list-container {
   display: flex;
   flex-direction: column;

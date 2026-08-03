@@ -363,6 +363,7 @@ const labelCheckboxes = {
   right: document.getElementById('label-right')
 };
 const poiListSelect = document.getElementById('poi-list');
+const btnGotoPin = document.getElementById('btn-goto-pin');
 const poiTooFarDialog = document.getElementById('poi-too-far-dialog');
 const poiTooFarMessage = document.getElementById('poi-too-far-message');
 const btnPoiShowAnyway = document.getElementById('btn-poi-show-anyway');
@@ -2060,6 +2061,7 @@ function renderPoiList() {
     poiListSelect.appendChild(option);
   });
   poiListSelect.disabled = !lastAnchorName;
+  btnGotoPin.hidden = !lastAnchorName;
 }
 
 // § Additional POIs — pans to whatever POI is currently selected in the
@@ -2109,6 +2111,12 @@ function navigatePoiList(direction) {
   poiListSelect.selectedIndex = (poiListSelect.selectedIndex + direction + count) % count;
   panToSelectedPoi();
 }
+
+// § Additional POIs — Goto Pin button, a mouse-only affordance replacing
+// the on-screen Pins list box (now hidden, see #poi-list-container in
+// index.html) for sighted users who don't know the ./, hotkeys or
+// dot4/dot1. One direction only, same as those keys' forward step.
+btnGotoPin.addEventListener('click', () => navigatePoiList(1));
 
 // § Editing the Map — every street/pathway name currently in lastWays
 // (regardless of hidden state -- the dialog must still list a hidden
