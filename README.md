@@ -61,7 +61,7 @@ Top to bottom, left to right:
 
 * At the very top of the page, before the H1: "Connect Dot Pad" button, then the **Main Menu** button. 
 * H1: "Welcome to DotTMAP"
-* Before any map exists: instructional text ("Search for an address or location to get started.") followed by a standalone **New Map** button. Once an anchor pin exists, the instructional text disappears (to make more room for the map) and the button is replaced by the **Map Menu** — see [New Map / New Pin](#new-map--new-pin) below for both, plus [Edit Pin](#edit-pin).
+* Before any map exists: instructional text ("To get started, connect your Dot Pad, then use the New Map button to search for any address or location. Try the Help button for more information.") followed by a standalone **New Map** button. Once an anchor pin exists, the instructional text disappears (to make more room for the map) and the button is replaced by the **Map Menu** — see [New Map / New Pin](#new-map--new-pin) below for both, plus [Edit Pin](#edit-pin).
 * Below that: H2 with the found address (anchor pin).
 * Below the H2: the visual representation of the map.
 * Immediately below the map: a print version of the message display (live ARIA region).
@@ -226,7 +226,7 @@ If a pan would leave a pin marker's footprint straddling the boundary between th
 
 ## New Map / New Pin
 
-Starting a map and adding a pin to one both go through short dialogs rather than an always-visible search field, so the main page stays uncluttered (see `ui-cleanup.md` for the design rationale). Before any map exists, a standalone **New Map** button is the sole entry point, next to instructional text ("Search for an address or location to get started."). Once an anchor pin exists, that text disappears and the button is replaced by the **Map Menu** — a WAI-ARIA "Actions Menu Button" (same pattern as [Main Menu](#main-menu)) — with two items, **New Map** and **New Pin**, arrow-key navigable. The `new-menu-*` element ids weren't renamed to match "Map Menu" — internal identifiers, not user-facing text, same convention as the POI/Pin rename (see [Additional Pins](#additional-pins)).
+Starting a map and adding a pin to one both go through short dialogs rather than an always-visible search field, so the main page stays uncluttered (see `ui-cleanup.md` for the design rationale). Before any map exists, a standalone **New Map** button is the sole entry point, next to instructional text ("To get started, connect your Dot Pad, then use the New Map button to search for any address or location. Try the Help button for more information."). Once an anchor pin exists, that text disappears and the button is replaced by the **Map Menu** — a WAI-ARIA "Actions Menu Button" (same pattern as [Main Menu](#main-menu)) — with two items, **New Map** and **New Pin**, arrow-key navigable. The `new-menu-*` element ids weren't renamed to match "Map Menu" — internal identifiers, not user-facing text, same convention as the POI/Pin rename (see [Additional Pins](#additional-pins)).
 
 The second item is **New Pin** or **Edit Pin**, never both — see [Edit Pin](#edit-pin) below for when and why it switches, and why `p` (and its quiet `a` alias) cover both without a separate hotkey.
 
