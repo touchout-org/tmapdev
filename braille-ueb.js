@@ -803,27 +803,57 @@ function translateOtherToken(ch) {
   return cells ? cells.slice() : [0]; // unmapped character -> blank cell, graceful fallback
 }
 
-// Plain per-letter spelling with a capital sign before each capital
-// letter (no capsword-phrase optimization -- this app's message text is
-// never long stretches of capitals, so the simple per-letter form is
-// both correct and sufficient). Shared by Grade 1 and by Grade 2's
-// fallback for any letter a contraction didn't cover.
+// Plain per-letter spelling, lowercase dot patterns only -- capitalization
+// is handled once per word by the caller (see capSignsForWord), not here.
+// Shared by Grade 1 and by Grade 2's fallback for any letter a contraction
+// didn't cover (always called there on an already-lowercased substring).
 function translateLettersPlain(letters) {
   const cells = [];
-  for (const ch of letters) {
-    if (isUpper(ch)) {
-      cells.push(UEB_CAPSIGN, UEB_LETTERS[ch.toLowerCase()]);
-    } else {
-      cells.push(UEB_LETTERS[ch]);
-    }
-  }
+  for (const ch of letters) cells.push(UEB_LETTERS[ch.toLowerCase()]);
   return cells;
 }
+
+// § Capitalization — UEB's capsword indicator: a doubled capital sign
+// (dots 6,6) once at the front of a word means the *whole word* is
+// capitalized, replacing what would otherwise be a separate capital
+// sign before every single letter. Applies in both grades -- it's a
+// general capitalization convention, not tied to contractions. Examines
+// the word's original, case-preserved text.
+//
+// Only a *multi*-letter run gets the doubled sign; a standalone single
+// capital letter (e.g. a lettered grid street like "B Street") always
+// uses just one capital sign -- see translateGrade2's own handling of
+// that case, which also needs the letter sign below.
+function capSignsForWord(word) {
+  if (word.length > 1 && [...word].every(isUpper)) return [UEB_CAPSIGN, UEB_CAPSIGN];
+  if (isUpper(word[0])) return [UEB_CAPSIGN];
+  return [];
+}
+
+// § Grade 2 — dots 5,6, the UEB letter sign. A standalone single letter
+// with no contraction of its own always falls through to its plain
+// letter cell -- but for the letters that also serve as one of the 23
+// alphabetic wordsigns (see UEB_WORDSIGN_RULES), that plain cell is the
+// *same* dot pattern as the wordsign's whole-word contraction (that's
+// the whole mnemonic behind wordsigns: letter b's own shape doubles as
+// "but", etc.). A capitalized standalone letter is ambiguous with that
+// wordsign unless marked otherwise -- the letter sign says "this cell
+// means the letter", not the word. Derived from the wordsign table
+// itself (which letters' shapes are actually reused) rather than a
+// separate hand-maintained list, so the two can't drift apart. A few
+// letters have no wordsign assigned to their shape at all -- a, i, o,
+// each already a genuine one-letter English word on its own ("a", "I",
+// "o") -- so a standalone capital A/I/O is never ambiguous with
+// anything and never needs the letter sign.
+const UEB_LETTERSIGN = 48; // dots 5,6
+const WORDSIGN_CELL_VALUES = new Set(UEB_WORDSIGN_RULES.map((rule) => rule.cells[0]));
 
 export function translateGrade1(text) {
   const cells = [];
   for (const token of tokenize(text)) {
-    if (token.type === 'word') cells.push(...translateLettersPlain(token.text));
+    if (token.type === 'word') {
+      cells.push(...capSignsForWord(token.text), ...translateLettersPlain(token.text));
+    }
     else if (token.type === 'number') cells.push(...translateNumberToken(token.text));
     else cells.push(...translateOtherToken(token.text));
   }
@@ -860,13 +890,13 @@ const MAX_RULE_LEN = Math.max(...[...RULES_BY_TEXT.keys()].map((t) => t.length))
 // candidate substring with a satisfied position rule before falling back
 // to shorter ones, and finally to a single plain (Grade 1) letter if
 // nothing at all matches there. Operates on the lowercased word;
-// capitalization is applied once, at the whole-word level, by the caller
-// (see translateGrade2) -- this app's message text is always plain
-// title-case-or-lowercase words, never mixed-case within a word, so a
-// single leading capital sign per word is the correct, sufficient case
-// to handle (see tmap spec.md § Braille translator for this and the
-// letter-sign-disambiguation simplification, both scoped to this app's
-// actual message content, not full UEB literary text).
+// capitalization (capSignsForWord) and the standalone-letter-sign case
+// are both applied by the caller (see translateGrade2), not here -- this
+// app's message text is always plain title-case-or-lowercase-or-ALL-CAPS
+// words, never irregular mixed case within a word, so examining just the
+// word's overall capitalization pattern (rather than tracking every
+// individual letter's case through contraction matching) is the correct,
+// sufficient case to handle (see tmap spec.md § Braille translator).
 function translateWordGrade2(word) {
   const lower = word.toLowerCase();
   const n = lower.length;
@@ -897,9 +927,15 @@ export function translateGrade2(text) {
   const cells = [];
   for (const token of tokenize(text)) {
     if (token.type === 'word') {
-      const wordCells = translateWordGrade2(token.text);
-      if (isUpper(token.text[0])) cells.push(UEB_CAPSIGN, ...wordCells);
-      else cells.push(...wordCells);
+      const word = token.text;
+      const letterCell = word.length === 1 ? UEB_LETTERS[word.toLowerCase()] : null;
+      if (letterCell !== null && isUpper(word[0]) && WORDSIGN_CELL_VALUES.has(letterCell)) {
+        // standalone capital letter that would otherwise misread as the
+        // wordsign sharing its shape -- see UEB_LETTERSIGN above.
+        cells.push(UEB_LETTERSIGN, UEB_CAPSIGN, letterCell);
+      } else {
+        cells.push(...capSignsForWord(word), ...translateWordGrade2(word));
+      }
     } else if (token.type === 'number') {
       cells.push(...translateNumberToken(token.text));
     } else {
