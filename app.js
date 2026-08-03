@@ -419,6 +419,7 @@ const settingsCursorSoloTimeoutSelect = document.getElementById('settings-cursor
 const settingsAutoSimplifyCheckbox = document.getElementById('settings-auto-simplify');
 const btnSettingsDone = document.getElementById('btn-settings-done');
 const btnHelp = document.getElementById('menu-help');
+const btnHelpFooter = document.getElementById('btn-help-footer');
 const helpDialog = document.getElementById('help-dialog');
 const helpContent = document.getElementById('help-content');
 const btnHelpClose = document.getElementById('btn-help-close');
@@ -1355,7 +1356,14 @@ settingsAutoSimplifyCheckbox.addEventListener('change', () => {
 // dialog silently blank.
 let helpContentHtml = null;
 
-btnHelp.addEventListener('click', async () => {
+// § Help — shared by the Main Menu item, the footer Help button, and the
+// h / ? hotkeys below -- all three open the same dialog the same way.
+// Guards against re-opening: the Close button that takes focus inside the
+// dialog isn't a form control, so isFormControlFocused() doesn't block the
+// hotkeys while Help is already open, and showModal() throws if called on
+// a dialog that's already open.
+async function openHelpDialog() {
+  if (helpDialog.open) return;
   closeMainMenu({ focusButton: true });
   if (helpContentHtml === null) {
     helpContent.textContent = 'Loading help…';
@@ -1372,7 +1380,10 @@ btnHelp.addEventListener('click', async () => {
     helpDialog.showModal();
   }
   helpContent.innerHTML = helpContentHtml;
-});
+}
+
+btnHelp.addEventListener('click', openHelpDialog);
+btnHelpFooter.addEventListener('click', openHelpDialog);
 
 btnHelpClose.addEventListener('click', () => helpDialog.close());
 
@@ -5376,6 +5387,14 @@ document.addEventListener('keydown', (event) => {
   if (event.key === '/') {
     event.preventDefault();
     openStreetListDialog();
+    return;
+  }
+
+  // § Help — h or ? opens the Help dialog, regardless of whether a map is
+  // loaded yet, same as the label-zone toggles and / above.
+  if (event.key === 'h' || event.key === '?') {
+    event.preventDefault();
+    openHelpDialog();
     return;
   }
 

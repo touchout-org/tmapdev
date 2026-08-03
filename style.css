@@ -494,6 +494,34 @@ th[aria-sort="descending"] .sort-header::after {
 
 footer {
   margin-top: 2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
   color: #777;
   font-size: 0.8rem;
+}
+
+#build-id {
+  margin: 0;
+  flex: 1;
+}
+
+/* § Help — small but visually prominent against the muted footer text,
+   unlike File an Issue's plain button: a solid pill in the app's own ink
+   color (matches the pin icon and POI markers) rather than an arbitrary
+   new accent. */
+#btn-help-footer {
+  background: #1a1a1a;
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 0.3rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#btn-help-footer:hover,
+#btn-help-footer:focus {
+  background: #444;
 }

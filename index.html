@@ -15,7 +15,7 @@
   <div id="app-menu-row">
     <button type="button" id="btn-connect" autofocus>Connect Dot Pad</button>
     <div id="main-menu-container">
-      <button type="button" id="main-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="main-menu">Main Menu</button>
+      <button type="button" id="main-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="main-menu" title="Account options, saved maps, release notes, Help, and more.">Main Menu</button>
       <ul id="main-menu" role="menu" aria-labelledby="main-menu-button" hidden>
         <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-display-preferences">Display Preferences…</button></li>
         <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-customize-map" aria-disabled="true">Customize Map…</button></li>
@@ -37,7 +37,7 @@
   <div id="new-row">
     <button type="button" id="btn-new-map-standalone" title="Search: Open a map centered on a new location.">New Map</button>
     <div id="new-menu-container" hidden>
-      <button type="button" id="new-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="new-menu">New</button>
+      <button type="button" id="new-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="new-menu" title="Create a new map or add a pin.">New</button>
       <ul id="new-menu" role="menu" aria-labelledby="new-menu-button" hidden>
         <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-new-map" title="Search: Open a map centered on a new location.">New Map</button></li>
         <li role="none"><button type="button" role="menuitem" tabindex="-1" id="menu-new-pin" title="Mark a new location on this map.">New Pin</button></li>
@@ -282,7 +282,8 @@
 
   <footer>
     <p id="build-id">Build: __BUILD_TIME__</p>
-    <button type="button" id="btn-file-issue">File an Issue</button>
+    <button type="button" id="btn-help-footer" title="Quick guide to DotTMAP features and commands.">Help</button>
+    <button type="button" id="btn-file-issue" title="Send us feedback or a suggestion using GitHub issues.">File an Issue</button>
   </footer>
 
   <script type="module" src="app.js"></script>
