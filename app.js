@@ -3361,8 +3361,17 @@ async function fetchWays(bbox, searchQuery, country) {
 // yet -- that's Phase 2 -- so each piece (query, adapter, retry loop)
 // can be verified in isolation first.
 
+// A way normally needs a name to be worth fetching -- but a major highway
+// (motorway/trunk) missing a name tag and carrying only a ref (e.g. a
+// freeway segment OSM never got around to naming) is still worth showing,
+// since issue #19's ref substitution below is about to give it a usable
+// name anyway. Scoped to motorway/trunk specifically, not any ref-tagged
+// way -- tested against the app's existing local test areas (none
+// freeway-adjacent) with zero difference either scoped or unscoped, but
+// scoping keeps this rescue's reasoning consistent with ref only ever
+// mattering for major highways (see HIGHWAY_TIERS/processWays below).
 function buildPostpassQuery(bbox) {
-  return `SELECT osm_id, geom, tags FROM postpass_line WHERE geom && ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326) AND tags?'highway' AND tags?'name'`;
+  return `SELECT osm_id, geom, tags FROM postpass_line WHERE geom && ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326) AND tags?'highway' AND (tags?'name' OR (tags->>'highway' IN ('motorway','trunk') AND tags?'ref'))`;
 }
 
 // Resolved 2026-07-31 (spec §4.2): sampled 2,601 ways across 7 diverse
@@ -3462,6 +3471,39 @@ async function fetchFromPostpassWithRetry(bbox, requestId, country) {
   throw lastError;
 }
 
+// § Major highway ref substitution (issue #19) — most people know a major
+// highway by its numeric route designation (e.g. "I 80"), not its
+// honorary/colloquial OSM name (e.g. "Eastshore Freeway"), so a tier-1 way
+// (motorway/trunk -- see HIGHWAY_TIERS/processWays below) with a ref tag
+// has that ref substituted in for its display name instead. A physical
+// roadway can carry more than one concurrent designation (OSM's own
+// semicolon-separated ref convention, e.g. "I 80;I 580" where two
+// interstates share one alignment) -- every designation is kept, never
+// just the first, joined with a comma and sorted in numeric order so the
+// same stretch of road reads identically regardless of which order OSM's
+// data happens to store them in (adjacent segments of the same
+// concurrency aren't guaranteed to agree). The space between a
+// designation's letter prefix and its number is stripped (e.g. "I 80" ->
+// "I80", "CA 24" -> "CA24") -- reads better in braille and keeps a
+// comma-joined multi-designation name unambiguous; nothing else about a
+// designation's formatting is touched, since § Label creation's own
+// punctuation-stripping cleans up whatever's left by the time a braille
+// label is assigned. Tested against real Bay Bridge/MacArthur Maze
+// interchange data (I-80/I-580/I-880/I-980/CA-24 all converge there) --
+// see tmap issue #19 for the full investigation.
+function refDesignationSortKey(designation) {
+  const digits = designation.match(/\d+/);
+  return digits ? parseInt(digits[0], 10) : Infinity;
+}
+
+function humanizeRef(ref) {
+  return ref
+    .split(';')
+    .map((designation) => designation.trim().replace(/([A-Z]+)\s+(\d)/g, '$1$2'))
+    .sort((a, b) => refDesignationSortKey(a) - refDesignationSortKey(b))
+    .join(',');
+}
+
 // § Data ingestion and cleaning pipeline — the automated roadway/pedestrian
 // dedup and carriageway collapse that used to run here are still removed
 // for the manual-editing experiment (see git tag `pre-manual-declutter` on
@@ -3471,10 +3513,22 @@ async function fetchFromPostpassWithRetry(bbox, requestId, country) {
 // Tier assignment came back, though: every way still gets tagged with its
 // street-importance tier, purely as data for the Map Complexity filter (see
 // MAP_COMPLEXITY_LEVELS/visibleWays) -- nothing here hides anything
-// automatically.
+// automatically. Ref substitution (issue #19, see humanizeRef above) also
+// happens here, the one place every way's name is already being touched --
+// every downstream consumer (label assignment, street lists, cursor
+// messages, etc.) reads way.tags.name directly, so normalizing it once
+// here means none of them need their own awareness of this at all. The
+// original name, if any, is kept at tags.honorificName -- free to keep
+// (nothing else reads it yet) and cheap insurance against ever needing it
+// back.
 function processWays(rawWays) {
   for (const way of rawWays) {
     way.tier = HIGHWAY_TIERS[way.tags && way.tags.highway] || MAX_TIER;
+    const ref = way.tags && way.tags.ref && way.tags.ref.trim();
+    if (way.tier === 1 && ref) {
+      way.tags.honorificName = way.tags.name;
+      way.tags.name = humanizeRef(ref);
+    }
   }
   return rawWays;
 }
