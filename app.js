@@ -170,24 +170,41 @@ async function loadLocalTestData(query) {
   return data;
 }
 
-// Settings-ready variables (see tmap spec.md § Settings) — not yet exposed in a UI,
-// but kept as named constants rather than inlined so the Settings dialog has a real
-// value to bind to later.
-//
-// Larger than the earlier 0.15mi test value now that Scale/Pan (Phase 1
-// item 6) exist -- the original concern about a big fetch being too dense
-// to read by touch was about cramming the whole fetch region into the
-// display at once, which no longer happens now that only a scale-sized
-// viewport window is ever shown. Not yet the spec's real [1 mile] default,
-// though: empirically tested both directly against the public Overpass
-// instance (isolated single requests, not rate-limit noise) -- 1 mile
-// half-side reliably times out (504 after ~13s) for this dense test area,
-// while 0.5 miles reliably succeeds (~3s, ~400KB). 0.5mi gets Scale changes
-// visibly working up toward the 1000ft preset with some room to pan.
-// Revisit once a non-public/self-hosted Overpass endpoint is used -- this
-// constraint is about the fetch payload itself, independent of whatever
-// processWays does (or doesn't) do with it afterward.
-const POI_DISTANCE_THRESHOLD_MILES = 0.5;
+// § Settings — Map Size: the edge length of the square region fetched from
+// Postpass around the anchor pin (see § Data sources below) -- also,
+// per issue #15, the practical "does a new search join the current map or
+// start a fresh one" boundary, since that check hit-tests directly against
+// whatever square actually got fetched (see createNewAnchor/loadMapRecord
+// below), not a separately-tracked distance. Two independent round-number
+// ladders, same pattern as Scale (SCALE_PRESETS_FT/M further down) -- not
+// exact conversions of each other. Index 0 ([1 mile]/[1.5 km]) matches
+// this setting's original fixed 0.5-mile-half-side constant, kept as the
+// default. Larger sizes only became viable once the live street-data
+// source switched from Overpass to Postpass (see § Data sources): Overpass
+// reliably timed out around a 1mi half-side (1x1mi full fetch) for a dense
+// test area, while Postpass measured well under 1s for a full 3x3mi fetch
+// (2,660 ways) in the same area, no error at any size tried. A first step
+// toward issue #3 (additional zoom levels) -- not that feature itself, just
+// exploring what larger fetch areas look and feel like.
+const MAP_SIZE_PRESETS_MI = [1, 2, 3];
+const MAP_SIZE_PRESETS_KM = [1.5, 3, 5];
+const DEFAULT_MAP_SIZE_INDEX = 0;
+let mapSizeIndex = DEFAULT_MAP_SIZE_INDEX;
+
+// The actual fetch half-side in miles (squareBoundingBox's own unit),
+// regardless of which ladder/unit system is currently active -- converts
+// the metric ladder's km value down to miles via MILES_TO_METERS. Safe to
+// reference MILES_TO_METERS/unitSystem here even though both are declared
+// later in the file: this function's body only ever runs after the whole
+// module has finished loading (in response to a search or a Map Size
+// change), same as every other function in this file that forward-
+// references a later const.
+function mapHalfSideMiles() {
+  const fullSideMiles = unitSystem === 'metric'
+    ? (MAP_SIZE_PRESETS_KM[mapSizeIndex] * 1000) / MILES_TO_METERS
+    : MAP_SIZE_PRESETS_MI[mapSizeIndex];
+  return fullSideMiles / 2;
+}
 
 // § Settings — the first of this block's settings to actually get a real
 // UI (see the Settings dialog wiring further down): which braille code
@@ -420,6 +437,7 @@ const btnDisconnect = document.getElementById('menu-disconnect');
 const settingsDialog = document.getElementById('settings-dialog');
 const settingsBrailleCodeSelect = document.getElementById('settings-braille-code');
 const settingsUnitsSelect = document.getElementById('settings-units');
+const settingsMapSizeSelect = document.getElementById('settings-map-size');
 const settingsPanAmountSelect = document.getElementById('settings-pan-amount');
 const settingsCursorSoloTimeoutSelect = document.getElementById('settings-cursor-solo-timeout');
 const settingsAutoSimplifyCheckbox = document.getElementById('settings-auto-simplify');
@@ -489,9 +507,9 @@ let labelZones = { top: false, bottom: false, left: false, right: false };
 
 // § Settings — Settings persistence across sessions, local-only via
 // localStorage, independent of sign-in (see tmap spec.md § Settings /
-// Accounts and Data). Covers exactly the five settings that already
-// survive a new anchor search unchanged (brailleCodeSetting, unitSystem,
-// panAmountFraction, labelZones, cursorSoloTimeoutSeconds,
+// Accounts and Data). Covers exactly the settings that already survive a
+// new anchor search unchanged (brailleCodeSetting, unitSystem,
+// mapSizeIndex, panAmountFraction, labelZones, cursorSoloTimeoutSeconds,
 // autoSimplifyEnabled) -- deliberately NOT scaleIndex or mapComplexityIndex
 // itself, since
 // showAnchor already resets that to DEFAULT_SCALE_INDEX on every new
@@ -526,6 +544,9 @@ function loadPersistedSettings() {
   if (stored.unitSystem === 'imperial' || stored.unitSystem === 'metric') {
     unitSystem = stored.unitSystem;
   }
+  if (Number.isInteger(stored.mapSizeIndex) && stored.mapSizeIndex >= 0 && stored.mapSizeIndex < MAP_SIZE_PRESETS_MI.length) {
+    mapSizeIndex = stored.mapSizeIndex;
+  }
   if (typeof stored.panAmountFraction === 'number' && [0.25, 0.5, 0.75, 1].includes(stored.panAmountFraction)) {
     panAmountFraction = stored.panAmountFraction;
   }
@@ -542,9 +563,9 @@ function loadPersistedSettings() {
   }
 }
 
-// Called after every change to one of the five persisted settings (see
-// each control's own change listener, and setLabelZone). Failure (e.g.
-// storage disabled/full in this browser) is silently ignored -- this is a
+// Called after every change to one of the persisted settings (see each
+// control's own change listener, and setLabelZone). Failure (e.g. storage
+// disabled/full in this browser) is silently ignored -- this is a
 // convenience feature, not a P0 requirement to surface errors for like
 // Nominatim/Overpass failures are.
 function savePersistedSettings() {
@@ -552,6 +573,7 @@ function savePersistedSettings() {
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify({
       brailleCodeSetting,
       unitSystem,
+      mapSizeIndex,
       panAmountFraction,
       labelZones,
       cursorSoloTimeoutSeconds,
@@ -1081,6 +1103,27 @@ scaleSelect.addEventListener('change', () => {
   setScaleIndex(Number(scaleSelect.value));
 });
 
+// § Settings — Map Size, populated once from MAP_SIZE_PRESETS_MI, same
+// index-based relabel-in-place pattern as Scale above (see
+// formatMapSizeLabel/refreshMapSizeOptions further down). Unlike Scale,
+// changing this doesn't touch anything currently on screen -- it only
+// takes effect on the *next* new map search (see mapHalfSideMiles(),
+// createNewAnchor/loadMapRecord) -- so there's no live refresh here, just
+// the message field announcement in the change listener below.
+MAP_SIZE_PRESETS_MI.forEach((_, index) => {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = formatMapSizeLabel(index);
+  settingsMapSizeSelect.appendChild(option);
+});
+settingsMapSizeSelect.value = String(mapSizeIndex);
+
+settingsMapSizeSelect.addEventListener('change', () => {
+  mapSizeIndex = Number(settingsMapSizeSelect.value);
+  savePersistedSettings();
+  setMessage(`Map size: ${settingsMapSizeSelect.selectedOptions[0].textContent}. Applies to the next new map search.`);
+});
+
 // § Braille labels — the checkboxes (living in the Settings dialog, under
 // its own "Braille Options" heading) are a live view of the shared
 // labelZones state (see setLabelZone), not a separately-synced copy: they
@@ -1295,6 +1338,7 @@ btnSettings.addEventListener('click', () => {
   closeMainMenu({ focusButton: true });
   settingsBrailleCodeSelect.value = brailleCodeSetting;
   settingsUnitsSelect.value = unitSystem;
+  settingsMapSizeSelect.value = String(mapSizeIndex);
   settingsPanAmountSelect.value = String(panAmountFraction);
   settingsCursorSoloTimeoutSelect.value = String(cursorSoloTimeoutSeconds);
   for (const zone in labelCheckboxes) labelCheckboxes[zone].checked = labelZones[zone];
@@ -1325,6 +1369,7 @@ settingsUnitsSelect.addEventListener('change', () => {
   unitSystem = settingsUnitsSelect.value;
   savePersistedSettings();
   refreshScaleOptions();
+  refreshMapSizeOptions();
   reclampViewportCenter();
   // § Auto Simplification — a Units switch re-renders the map at a new
   // effective real-world footprint for the same scale index (see above),
@@ -1665,9 +1710,9 @@ async function proceedWithPlace(place, query, forceNewAnchor) {
   // which used to reject a location sitting in one of the fetched
   // square's corners even though its data was already fetched and
   // rendered (issue #15; see squareBoundingBox, which sizes that square's
-  // half-side to this same POI_DISTANCE_THRESHOLD_MILES -- a circle of
-  // that radius is inscribed in the square, so this hit-test can only
-  // ever admit more locations than the old check did, never fewer).
+  // half-side via mapHalfSideMiles() -- the current Map Size setting -- a
+  // circle of that radius is inscribed in the square, so this hit-test can
+  // only ever admit more locations than the old check did, never fewer).
   const { eastFt, northFt } = feetOffsetFrom(lat, lon, lastAnchorLat, lastAnchorLon);
   const distFt = Math.hypot(eastFt, northFt);
   const withinFetchedBoundary =
@@ -1749,7 +1794,7 @@ btnNewMapCancel.addEventListener('click', () => newMapDialog.close());
 // address only) is what's spoken/brailled everywhere else -- see
 // formatShortAddress.
 async function createNewAnchor(displayName, shortName, lat, lon, query, country) {
-  const bbox = squareBoundingBox(lat, lon, POI_DISTANCE_THRESHOLD_MILES);
+  const bbox = squareBoundingBox(lat, lon, mapHalfSideMiles());
   let ways;
   try {
     ways = await fetchWays(bbox, query, country);
@@ -1787,7 +1832,7 @@ async function createNewAnchor(displayName, shortName, lat, lon, query, country)
 // argument, so they always fetch live, regardless of what's sitting in
 // the current-map ways cache.
 async function loadMapRecord(record, cachedWays) {
-  const bbox = squareBoundingBox(record.anchorLat, record.anchorLon, POI_DISTANCE_THRESHOLD_MILES);
+  const bbox = squareBoundingBox(record.anchorLat, record.anchorLon, mapHalfSideMiles());
   let ways;
   if (cachedWays) {
     ways = cachedWays;
@@ -3260,6 +3305,24 @@ function formatScaleLabel(index) {
 function refreshScaleOptions() {
   Array.from(scaleSelect.options).forEach((option, index) => {
     option.textContent = formatScaleLabel(index);
+  });
+}
+
+// § Settings — Map Size label, same pairing as formatScaleLabel/
+// refreshScaleOptions above: MAP_SIZE_PRESETS_MI/KM are independent
+// round-number ladders (see their own declaration), not conversions of
+// each other.
+function formatMapSizeLabel(index) {
+  return unitSystem === 'metric'
+    ? `${MAP_SIZE_PRESETS_KM[index]} km`
+    : `${MAP_SIZE_PRESETS_MI[index]} mi`;
+}
+
+// § Settings — re-labels every existing Map Size combo box option after a
+// Units change, same pattern as refreshScaleOptions above.
+function refreshMapSizeOptions() {
+  Array.from(settingsMapSizeSelect.options).forEach((option, index) => {
+    option.textContent = formatMapSizeLabel(index);
   });
 }
 
