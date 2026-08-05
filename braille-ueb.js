@@ -774,6 +774,7 @@ export const UEB_G2_RULES = [
   { text: "ing", position: "midendword", cells: [44] },
   { text: "in", position: "always", cells: [20] },
   { text: "bb", position: "midword", cells: [6] },
+  { text: "dd", position: "midword", cells: [50] },
   { text: "ea", position: "midword", cells: [2] },
   { text: "en", position: "always", cells: [34] },
   { text: "there", position: "always", cells: [16, 46] },
