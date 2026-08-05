@@ -454,6 +454,10 @@ const btnReleaseNotesClose = document.getElementById('btn-release-notes-close');
 const streetListDialog = document.getElementById('street-list-dialog');
 const streetListContent = document.getElementById('street-list-content');
 const btnStreetListClose = document.getElementById('btn-street-list-close');
+const btnAbout = document.getElementById('menu-about');
+const aboutDialog = document.getElementById('about-dialog');
+const aboutContent = document.getElementById('about-content');
+const btnAboutClose = document.getElementById('btn-about-close');
 
 let hasAnchor = false;
 
@@ -1485,6 +1489,32 @@ btnReleaseNotes.addEventListener('click', async () => {
 });
 
 btnReleaseNotesClose.addEventListener('click', () => releaseNotesDialog.close());
+
+// § About — same fetch-once-and-cache pattern as Help/Release Notes above,
+// its own static file (about-content.html) so the history/credits text can
+// be edited without touching index.html or app.js.
+let aboutContentHtml = null;
+
+btnAbout.addEventListener('click', async () => {
+  closeMainMenu({ focusButton: true });
+  if (aboutContentHtml === null) {
+    aboutContent.textContent = 'Loading…';
+    aboutDialog.showModal();
+    try {
+      const res = await fetch('about-content.html');
+      if (!res.ok) throw new Error('about-content-failed');
+      aboutContentHtml = await res.text();
+    } catch (err) {
+      aboutContent.textContent = 'Could not load About content.';
+      return;
+    }
+  } else {
+    aboutDialog.showModal();
+  }
+  aboutContent.innerHTML = aboutContentHtml;
+});
+
+btnAboutClose.addEventListener('click', () => aboutDialog.close());
 
 // § Braille labels — shared toggle used by both the dialog checkboxes and
 // the i/j/k/l hotkeys. Reports the new state in the message field per
