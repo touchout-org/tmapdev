@@ -9,7 +9,7 @@
 // Built on dotpad-toolkit (../../dotpad-toolkit/) rather than duplicating
 // DotTMAP's own copies of this logic — see that repo's README for the
 // module index and the encoding/dimension gotchas already documented there.
-import { DotPadSDK, DotPadScanner, DisplayMode, DataCodes } from '../../dotpad-toolkit/vendor/web-sdk-3.0.0/DotPadSDK-3.0.0.js';
+import { DotPadSDK, DotPadScanner, DisplayMode, DataCodes } from '../../dotpad-toolkit/vendor/web-sdk-3.0.1/DotPadSDK-3.0.1.js';
 import { connectDotPad, disconnectDotPad, watchDotPad } from '../../dotpad-toolkit/device/connection.js';
 import { sendTextToDevice, truncateMessage } from '../../dotpad-toolkit/device/messageDisplay.js';
 import { sendGraphicToDevice, graphicsDimensions } from '../../dotpad-toolkit/device/graphicsDisplay.js';
@@ -145,7 +145,7 @@ function sendSingleFrame(pixels) {
 // startLine, startCellIndex, mode) directly, bypassing
 // DotPadSDK.displayGraphicData()'s public wrapper -- that wrapper always
 // forwards to the device with startLine=1/startCellIndex=0, i.e. it can
-// only ever do a full-frame write (see DotPadSDK-3.0.0.js). The device's
+// only ever do a full-frame write (see DotPadSDK-3.0.1.js). The device's
 // own method does support a sub-range: startLine is a 1-indexed cell-row,
 // and startCellIndex/hex-length together address a flat, row-major CELL
 // range (2 hex chars per cell -- NOT the dot/nibble addressing

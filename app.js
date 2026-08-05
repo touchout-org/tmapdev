@@ -3,7 +3,7 @@ import {
   DotPadScanner,
   DisplayMode,
   DataCodes
-} from './web-sdk-3.0.0/DotPadSDK-3.0.0.js';
+} from './web-sdk-3.0.1/DotPadSDK-3.0.1.js';
 import { translateGrade1, translateGrade2 } from './braille-ueb.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js';
 import {

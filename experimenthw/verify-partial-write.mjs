@@ -9,7 +9,10 @@ import { drawCursorRing, drawLinePixels } from '../../dotpad-toolkit/graphics/ra
 const numCols = 30, numRows = 10;
 const displayW = numCols * 2, displayH = numRows * 4;
 
-// ---- Transcribed verbatim from DotPadSDK-3.0.0.js ----
+// ---- Transcribed verbatim from DotPadSDK-3.0.1.js (re-verified against
+// 3.0.1's source when the vendored SDK was bumped from 3.0.0 -- this
+// specific algorithm is byte-for-byte unchanged between the two versions)
+// ----
 // DotDevice.prototype.displayGraphicData(e,t=1,s=0,i=GraphicMode), renamed
 // params: hex=e, startLine=t, startCellIndex=s.
 function deviceDisplayGraphicData(lineBuffers, hex, startLine, startCellIndex) {
