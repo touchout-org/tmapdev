@@ -1,4 +1,5 @@
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+const POSTPASS_URL = 'https://postpass.geofabrik.de/api/interpreter';
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org/search';
 const NOMINATIM_REVERSE_URL = 'https://nominatim.openstreetmap.org/reverse';
 const REVERSE_GEOCODE_DELAY_MS = 1100; // stay under Nominatim's ~1 req/sec usage policy
@@ -26,10 +27,29 @@ const viewMenu = document.getElementById('view-menu');
 const viewMenuItems = Array.from(viewMenu.querySelectorAll('[role="menuitem"]'));
 const copySvgBtn = document.getElementById('copy-svg-btn');
 const copySvgStatus = document.getElementById('copy-svg-status');
+const dataSourceFieldset = document.getElementById('data-source-fieldset');
+const dataSourceRadios = Array.from(dataSourceFieldset.querySelectorAll('input[name="data-source"]'));
 
 let lastWays = [];
 let lastBbox = null;
 let currentView = 'overview';
+
+// § Data source switch — Postpass/Overpass, ported from tmapdev's own
+// DATA_SOURCE toggle (see postpass-migration-spec.md). Persisted so the
+// choice survives a page reload, same pattern tmap itself uses for user
+// settings. Selecting a source only takes effect on the next search --
+// it never re-fetches whatever's already on screen.
+const DATA_SOURCE_STORAGE_KEY = 'osmDataMine.dataSource';
+let dataSource = localStorage.getItem(DATA_SOURCE_STORAGE_KEY) || 'postpass';
+if (!dataSourceRadios.some((r) => r.value === dataSource)) dataSource = 'postpass';
+dataSourceRadios.forEach((radio) => {
+  radio.checked = radio.value === dataSource;
+  radio.addEventListener('change', () => {
+    if (!radio.checked) return;
+    dataSource = radio.value;
+    localStorage.setItem(DATA_SOURCE_STORAGE_KEY, dataSource);
+  });
+});
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -87,7 +107,9 @@ viewMenuItems.forEach((item, index) => {
   item.addEventListener('click', () => {
     currentView = item.dataset.view;
     closeViewMenu({ focusButton: true });
-    if (lastWays.length) {
+    if (currentView === 'all-types') {
+      if (lastBbox) loadAndRenderAllTypes();
+    } else if (lastWays.length) {
       renderResults(lastWays);
     }
   });
@@ -212,6 +234,10 @@ function formatMatchedLocation(place) {
 }
 
 async function fetchWays(bbox) {
+  return dataSource === 'postpass' ? fetchWaysFromPostpass(bbox) : fetchWaysFromOverpass(bbox);
+}
+
+async function fetchWaysFromOverpass(bbox) {
   const query = `[out:json][timeout:25];way["highway"]["name"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});out geom;`;
   const res = await fetch(OVERPASS_URL, {
     method: 'POST',
@@ -220,6 +246,253 @@ async function fetchWays(bbox) {
   if (!res.ok) throw new Error('overpass-failed');
   const data = await res.json();
   return data.elements || [];
+}
+
+// Ported from tmapdev's own buildPostpassQuery/adaptPostpassResponse (see
+// postpass-migration-spec.md) without the production retry/backoff/
+// analytics-logging machinery -- this is a data-exploration sandbox, not
+// the live app, so a single attempt is enough. Deliberately mirrors the
+// Overpass query above exactly (name required, no issue #19 ref rescue)
+// so the two sources stay directly comparable here.
+function buildPostpassWaysQuery(bbox) {
+  return `SELECT osm_id, geom, tags FROM postpass_line WHERE geom && ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326) AND tags?'highway' AND tags?'name'`;
+}
+
+async function fetchWaysFromPostpass(bbox) {
+  const query = buildPostpassWaysQuery(bbox);
+  const res = await fetch(POSTPASS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if (!res.ok) throw new Error('postpass-failed');
+  const data = await res.json();
+  if (data.type !== 'FeatureCollection') throw new Error('postpass-unexpected-response');
+  return data.features.map((f) => ({
+    type: 'way',
+    id: f.properties.osm_id,
+    tags: f.properties.tags || {},
+    geometry: flattenMultiLineString(f.geometry)
+  }));
+}
+
+// Postpass packages line geometry as MultiLineString even for a normal,
+// unsplit way -- tmapdev's own migration sampled 2,601 real ways across 7
+// areas and found this is just Postpass's packaging convention, never an
+// actually-split way (see postpass-migration-spec.md §4.2). Takes the
+// first part; warns rather than silently mishandling it if that's ever
+// wrong.
+function flattenMultiLineString(geometry) {
+  if (geometry.coordinates.length > 1) {
+    console.warn('Postpass returned a multi-part MultiLineString', geometry);
+  }
+  return geometry.coordinates[0].map(([lon, lat]) => ({ lat, lon }));
+}
+
+// § All types — a second, much broader fetch than fetchWays()'s
+// name+highway-only query: every tagged node/way/relation in the bbox,
+// regardless of type. Loaded lazily (only when the "All types" view is
+// actually selected, see loadAndRenderAllTypes below) since it returns
+// far more data than the street-only views need.
+
+async function fetchAllTypes(bbox) {
+  return dataSource === 'postpass' ? fetchAllTypesFromPostpass(bbox) : fetchAllTypesFromOverpass(bbox);
+}
+
+// `[~"."~"."]` is the standard Overpass QL idiom for "has at least one
+// tag" (key matches the any-character regex "." AND value matches "."),
+// i.e. excludes bare geometry-only nodes (way vertices) that carry no
+// tags of their own.
+async function fetchAllTypesFromOverpass(bbox) {
+  const bboxArgs = `${bbox.south},${bbox.west},${bbox.north},${bbox.east}`;
+  const query = `[out:json][timeout:25];(node[~"."~"."](${bboxArgs});way[~"."~"."](${bboxArgs});relation[~"."~"."](${bboxArgs}););out geom;`;
+  const res = await fetch(OVERPASS_URL, {
+    method: 'POST',
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if (!res.ok) throw new Error('overpass-failed');
+  const data = await res.json();
+  return data.elements || [];
+}
+
+// postpass_pointlinepolygon is Postpass's combined view over its point/
+// line/polygon tables (see SCHEMA.md) -- one query covers every geometry
+// kind instead of three separate ones. `tags <> '{}'::jsonb` is the
+// Postpass-side equivalent of Overpass's `[~"."~"."]` any-tag filter.
+function buildPostpassAllTypesQuery(bbox) {
+  return `SELECT osm_type, osm_id, tags, geom FROM postpass_pointlinepolygon WHERE geom && ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326) AND tags <> '{}'::jsonb`;
+}
+
+async function fetchAllTypesFromPostpass(bbox) {
+  const query = buildPostpassAllTypesQuery(bbox);
+  const res = await fetch(POSTPASS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'data=' + encodeURIComponent(query)
+  });
+  if (!res.ok) throw new Error('postpass-failed');
+  const data = await res.json();
+  if (data.type !== 'FeatureCollection') throw new Error('postpass-unexpected-response');
+  return data.features.map((f) => ({
+    type: osmTypeToElementType(f.properties.osm_type),
+    id: f.properties.osm_id,
+    tags: f.properties.tags || {}
+  }));
+}
+
+function osmTypeToElementType(osmType) {
+  if (osmType === 'N') return 'node';
+  if (osmType === 'W') return 'way';
+  if (osmType === 'R') return 'relation';
+  return 'unknown';
+}
+
+// The standard OSM "Map Features" top-level keys (wiki.openstreetmap.org/
+// wiki/Map_features) -- the raw tag keys OSM itself treats as
+// feature-defining, as opposed to attribute/meta keys like name, addr:*,
+// source, or wikidata. An element groups under every one of these keys it
+// carries (most only have one), so e.g. a way tagged both railway=rail
+// and bridge=yes would appear under both "railway" and "bridge".
+const PRIMARY_TYPE_KEYS = [
+  'aerialway', 'aeroway', 'amenity', 'barrier', 'boundary', 'bridge',
+  'building', 'craft', 'emergency', 'geological', 'healthcare', 'highway',
+  'historic', 'landuse', 'leisure', 'man_made', 'military', 'natural',
+  'office', 'place', 'power', 'public_transport', 'railway', 'route',
+  'shop', 'sport', 'telecom', 'tourism', 'water', 'waterway'
+];
+const PRIMARY_TYPE_KEY_SET = new Set(PRIMARY_TYPE_KEYS);
+
+// Groups elements by feature-type key, then by that key's value, e.g.
+// waterway -> stream -> [elements]. Elements carrying none of
+// PRIMARY_TYPE_KEYS (attribute-only tags, or a genuinely uncategorized
+// key) land in `other` rather than being dropped -- "truly everything
+// tagged" was the deliberate scope for this view.
+function groupAllTypesElements(elements) {
+  const groups = new Map();
+  const other = [];
+
+  for (const el of elements) {
+    const tags = el.tags || {};
+    const matchedKeys = Object.keys(tags).filter((key) => PRIMARY_TYPE_KEY_SET.has(key));
+    if (matchedKeys.length === 0) {
+      other.push(el);
+      continue;
+    }
+    for (const key of matchedKeys) {
+      if (!groups.has(key)) groups.set(key, new Map());
+      const valueMap = groups.get(key);
+      const value = tags[key];
+      if (!valueMap.has(value)) valueMap.set(value, []);
+      valueMap.get(value).push(el);
+    }
+  }
+
+  return { groups, other };
+}
+
+let allTypesRequestToken = 0;
+
+async function loadAndRenderAllTypes() {
+  if (!lastBbox) return;
+  const bbox = lastBbox;
+  const token = ++allTypesRequestToken;
+  streetList.innerHTML = '';
+  setStatus('Loading all feature types...');
+
+  let elements;
+  try {
+    elements = await fetchAllTypes(bbox);
+  } catch (err) {
+    if (token !== allTypesRequestToken || currentView !== 'all-types') return;
+    setStatus('There was a problem retrieving all-types data from OpenStreetMap. Please try again.');
+    return;
+  }
+
+  if (token !== allTypesRequestToken || currentView !== 'all-types') return;
+  setStatus('');
+  renderAllTypesView(elements);
+}
+
+function renderAllTypesView(elements) {
+  streetList.innerHTML = '';
+  const { groups, other } = groupAllTypesElements(elements);
+  const sortedKeys = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b));
+
+  for (const key of sortedKeys) {
+    const valueMap = groups.get(key);
+    const totalCount = Array.from(valueMap.values()).reduce((sum, arr) => sum + arr.length, 0);
+
+    const li = document.createElement('li');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `${key} (${totalCount})`;
+    details.appendChild(summary);
+    details.appendChild(buildAllTypesValueList(valueMap));
+    li.appendChild(details);
+    streetList.appendChild(li);
+  }
+
+  if (other.length) {
+    const li = document.createElement('li');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `Other tags (${other.length})`;
+    details.appendChild(summary);
+    details.appendChild(buildAllTypesElementList(other));
+    li.appendChild(details);
+    streetList.appendChild(li);
+  }
+
+  if (!sortedKeys.length && !other.length) {
+    const li = document.createElement('li');
+    li.textContent = 'No tagged features found in this area.';
+    streetList.appendChild(li);
+  }
+}
+
+function buildAllTypesValueList(valueMap) {
+  const ul = document.createElement('ul');
+  const sortedValues = Array.from(valueMap.keys()).sort((a, b) => a.localeCompare(b));
+  for (const value of sortedValues) {
+    const elements = valueMap.get(value);
+    const li = document.createElement('li');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `${value} (${elements.length})`;
+    details.appendChild(summary);
+    details.appendChild(buildAllTypesElementList(elements));
+    li.appendChild(details);
+    ul.appendChild(li);
+  }
+  return ul;
+}
+
+function buildAllTypesElementList(elements) {
+  const ul = document.createElement('ul');
+  for (const el of elements) {
+    const tags = el.tags || {};
+    const name = tags.name || '(unnamed)';
+    const li = document.createElement('li');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `${name} — ${el.type} ${el.id}`;
+    details.appendChild(summary);
+    details.appendChild(buildTagList(tags));
+    li.appendChild(details);
+    ul.appendChild(li);
+  }
+  return ul;
+}
+
+function buildTagList(tags) {
+  const ul = document.createElement('ul');
+  const sortedKeys = Object.keys(tags).sort((a, b) => a.localeCompare(b));
+  for (const key of sortedKeys) {
+    const li = document.createElement('li');
+    li.textContent = `${key} = ${tags[key]}`;
+    ul.appendChild(li);
+  }
+  return ul;
 }
 
 function groupByStreetName(ways) {
@@ -238,7 +511,9 @@ function renderResults(ways) {
   streetList.innerHTML = '';
 
   const view = currentView;
-  if (view === 'address') {
+  if (view === 'all-types') {
+    loadAndRenderAllTypes();
+  } else if (view === 'address') {
     renderAddressView(ways);
   } else if (view === 'braille-labels') {
     renderBrailleLabelsView(ways);

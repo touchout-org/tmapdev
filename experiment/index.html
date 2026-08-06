@@ -17,10 +17,17 @@
     <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="unique-streets">Unique streets</button></li>
     <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="address">Address</button></li>
     <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="braille-labels">Braille Labels</button></li>
+    <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="all-types">All types</button></li>
   </ul>
 </div>
 
 <h1>OSM Data Viewer</h1>
+
+<fieldset id="data-source-fieldset">
+  <legend>Data source</legend>
+  <label><input type="radio" name="data-source" value="postpass" id="data-source-postpass"> Postpass</label>
+  <label><input type="radio" name="data-source" value="overpass" id="data-source-overpass"> Overpass</label>
+</fieldset>
 
 <form id="search-form">
   <label for="location-input">Location</label>

@@ -61,6 +61,23 @@ body {
   outline: none;
 }
 
+#data-source-fieldset {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #888;
+  border-radius: 4px;
+}
+
+#data-source-fieldset label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
 form {
   display: flex;
   gap: 0.5rem;
