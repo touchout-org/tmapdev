@@ -12,12 +12,12 @@
     Data view
   </button>
   <ul id="view-menu" role="menu" aria-labelledby="view-menu-button" hidden>
-    <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="overview">Overview</button></li>
-    <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="highway">Highway</button></li>
-    <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="unique-streets">Unique streets</button></li>
-    <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="address">Address</button></li>
-    <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="braille-labels">Braille Labels</button></li>
-    <li role="none"><button type="button" role="menuitem" tabindex="-1" data-view="all-types">All types</button></li>
+    <li role="none"><button type="button" role="menuitemradio" aria-checked="true" tabindex="-1" data-view="overview">Overview</button></li>
+    <li role="none"><button type="button" role="menuitemradio" aria-checked="false" tabindex="-1" data-view="highway">Highway</button></li>
+    <li role="none"><button type="button" role="menuitemradio" aria-checked="false" tabindex="-1" data-view="unique-streets">Unique streets</button></li>
+    <li role="none"><button type="button" role="menuitemradio" aria-checked="false" tabindex="-1" data-view="address">Address</button></li>
+    <li role="none"><button type="button" role="menuitemradio" aria-checked="false" tabindex="-1" data-view="braille-labels">Braille Labels</button></li>
+    <li role="none"><button type="button" role="menuitemradio" aria-checked="false" tabindex="-1" data-view="all-types">All types</button></li>
   </ul>
 </div>
 
@@ -39,6 +39,7 @@
 <div id="results">
   <p id="matched-location"></p>
   <p id="status-message" aria-live="polite">No results. Please submit a location.</p>
+  <h3 id="view-heading"></h3>
   <ul id="street-list"></ul>
 </div>
 

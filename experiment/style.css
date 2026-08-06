@@ -61,6 +61,10 @@ body {
   outline: none;
 }
 
+#view-menu button[aria-checked="true"]::before {
+  content: "\2713 ";
+}
+
 #data-source-fieldset {
   display: flex;
   gap: 1rem;
@@ -105,6 +109,7 @@ button {
 }
 
 #street-list {
+  list-style: none;
   padding-left: 1rem;
 }
 
@@ -113,6 +118,7 @@ button {
 }
 
 details > ul {
+  list-style: none;
   padding-left: 1rem;
 }
 

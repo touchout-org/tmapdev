@@ -24,15 +24,26 @@ const matchedLocation = document.getElementById('matched-location');
 const streetList = document.getElementById('street-list');
 const viewMenuButton = document.getElementById('view-menu-button');
 const viewMenu = document.getElementById('view-menu');
-const viewMenuItems = Array.from(viewMenu.querySelectorAll('[role="menuitem"]'));
+const viewMenuItems = Array.from(viewMenu.querySelectorAll('[role="menuitemradio"]'));
 const copySvgBtn = document.getElementById('copy-svg-btn');
 const copySvgStatus = document.getElementById('copy-svg-status');
 const dataSourceFieldset = document.getElementById('data-source-fieldset');
 const dataSourceRadios = Array.from(dataSourceFieldset.querySelectorAll('input[name="data-source"]'));
+const viewHeading = document.getElementById('view-heading');
+
+// Display label for each view, taken straight from the menu button's own
+// text so it can't drift out of sync with what the menu actually shows.
+const VIEW_LABELS = {};
+viewMenuItems.forEach((item) => { VIEW_LABELS[item.dataset.view] = item.textContent.trim(); });
 
 let lastWays = [];
 let lastBbox = null;
 let currentView = 'overview';
+
+function updateViewHeading() {
+  viewHeading.textContent = VIEW_LABELS[currentView] || '';
+}
+updateViewHeading();
 
 // § Data source switch — Postpass/Overpass, ported from tmapdev's own
 // DATA_SOURCE toggle (see postpass-migration-spec.md). Persisted so the
@@ -61,10 +72,10 @@ form.addEventListener('submit', (event) => {
 
 // § Layout experiment — accessible menu button (WAI-ARIA "Actions Menu
 // Button" pattern) replacing what used to be a radio-button fieldset in the
-// footer. Selecting an item takes effect immediately and closes the menu;
-// there's no persistent visual "currently selected" indicator by design
-// (this is an actions menu, not a settings/options menu), so menu items are
-// plain menuitem buttons rather than menuitemradio.
+// footer. Menu items are menuitemradio (not plain menuitem) since exactly
+// one view is always "current" and both a screen reader (via aria-checked)
+// and sighted users (via the CSS checkmark on [aria-checked="true"]) need
+// to be able to tell which one that is.
 function openViewMenu(focusIndex) {
   viewMenu.hidden = false;
   viewMenuButton.setAttribute('aria-expanded', 'true');
@@ -106,6 +117,8 @@ viewMenuButton.addEventListener('keydown', (event) => {
 viewMenuItems.forEach((item, index) => {
   item.addEventListener('click', () => {
     currentView = item.dataset.view;
+    viewMenuItems.forEach((mi) => mi.setAttribute('aria-checked', mi === item ? 'true' : 'false'));
+    updateViewHeading();
     closeViewMenu({ focusButton: true });
     if (currentView === 'all-types') {
       if (lastBbox) loadAndRenderAllTypes();
@@ -312,7 +325,39 @@ async function fetchAllTypesFromOverpass(bbox) {
   });
   if (!res.ok) throw new Error('overpass-failed');
   const data = await res.json();
-  return data.elements || [];
+  return (data.elements || []).map((el) => ({
+    type: el.type,
+    id: el.id,
+    tags: el.tags || {},
+    geometryKind: classifyOverpassGeometryKind(el)
+  }));
+}
+
+// Overpass doesn't label geometry kind directly -- derive it: a node is
+// always a point; a way is a shape (area) if its geometry is a closed ring
+// (first/last point coincide, OSM's own convention for "this line encloses
+// an area") and a line otherwise; a relation is classified by its own
+// `type` tag (multipolygon/boundary relations are areas, route relations
+// are lines), falling back to a plain "relation" label for anything else
+// rather than guessing wrong.
+function classifyOverpassGeometryKind(el) {
+  if (el.type === 'node') return 'point';
+  if (el.type === 'way') {
+    const geom = el.geometry || [];
+    const first = geom[0];
+    const last = geom[geom.length - 1];
+    if (geom.length >= 4 && first && last && first.lat === last.lat && first.lon === last.lon) {
+      return 'shape';
+    }
+    return 'line';
+  }
+  if (el.type === 'relation') {
+    const relType = el.tags && el.tags.type;
+    if (relType === 'multipolygon' || relType === 'boundary') return 'shape';
+    if (relType === 'route') return 'line';
+    return 'relation';
+  }
+  return 'unknown';
 }
 
 // postpass_pointlinepolygon is Postpass's combined view over its point/
@@ -336,7 +381,8 @@ async function fetchAllTypesFromPostpass(bbox) {
   return data.features.map((f) => ({
     type: osmTypeToElementType(f.properties.osm_type),
     id: f.properties.osm_id,
-    tags: f.properties.tags || {}
+    tags: f.properties.tags || {},
+    geometryKind: classifyPostpassGeometryKind(f.geometry && f.geometry.type)
   }));
 }
 
@@ -344,6 +390,17 @@ function osmTypeToElementType(osmType) {
   if (osmType === 'N') return 'node';
   if (osmType === 'W') return 'way';
   if (osmType === 'R') return 'relation';
+  return 'unknown';
+}
+
+// Postpass's combined view reports real GeoJSON geometry types directly
+// (it comes from three separate point/line/polygon tables under the
+// hood), so this is a straight lookup rather than the inference Overpass
+// needs.
+function classifyPostpassGeometryKind(geoJsonType) {
+  if (geoJsonType === 'Point') return 'point';
+  if (geoJsonType === 'LineString' || geoJsonType === 'MultiLineString') return 'line';
+  if (geoJsonType === 'Polygon' || geoJsonType === 'MultiPolygon') return 'shape';
   return 'unknown';
 }
 
@@ -467,21 +524,73 @@ function buildAllTypesValueList(valueMap) {
   return ul;
 }
 
+// Same phenomenon as street views' "N segments" grouping (see
+// groupByStreetName) -- a single real-world feature (a creek, a park
+// boundary, a rail line) is very often split across multiple OSM
+// elements sharing one name tag, not multiple distinct features. Elements
+// with no name at all can't be meaningfully grouped this way and are
+// listed individually.
 function buildAllTypesElementList(elements) {
   const ul = document.createElement('ul');
+  const named = new Map();
+  const unnamed = [];
+
   for (const el of elements) {
-    const tags = el.tags || {};
-    const name = tags.name || '(unnamed)';
+    const name = el.tags && el.tags.name;
+    if (name) {
+      if (!named.has(name)) named.set(name, []);
+      named.get(name).push(el);
+    } else {
+      unnamed.push(el);
+    }
+  }
+
+  const sortedNames = Array.from(named.keys()).sort((a, b) => a.localeCompare(b));
+  for (const name of sortedNames) {
+    const group = named.get(name);
     const li = document.createElement('li');
     const details = document.createElement('details');
     const summary = document.createElement('summary');
-    summary.textContent = `${name} — ${el.type} ${el.id}`;
+    summary.textContent = group.length > 1
+      ? `${name} (${group.length} segments)`
+      : `${name} — ${describeElement(group[0])}`;
     details.appendChild(summary);
-    details.appendChild(buildTagList(tags));
+    details.appendChild(group.length > 1 ? buildElementSegmentList(group) : buildTagList(group[0].tags));
     li.appendChild(details);
     ul.appendChild(li);
   }
+
+  for (const el of unnamed) {
+    const li = document.createElement('li');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `(unnamed) — ${describeElement(el)}`;
+    details.appendChild(summary);
+    details.appendChild(buildTagList(el.tags));
+    li.appendChild(details);
+    ul.appendChild(li);
+  }
+
   return ul;
+}
+
+function buildElementSegmentList(elements) {
+  const ul = document.createElement('ul');
+  elements.forEach((el, index) => {
+    const li = document.createElement('li');
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `Segment ${index + 1} — ${describeElement(el)}`;
+    details.appendChild(summary);
+    details.appendChild(buildTagList(el.tags));
+    li.appendChild(details);
+    ul.appendChild(li);
+  });
+  return ul;
+}
+
+function describeElement(el) {
+  return `${el.geometryKind} · ${el.type} ${el.id}`;
 }
 
 function buildTagList(tags) {
