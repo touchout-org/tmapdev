@@ -389,6 +389,7 @@ export const UEB_G2_RULES = [
   { text: "deasp", position: "begword", cells: null },
   { text: "deass", position: "begword", cells: null },
   { text: "eance", position: "midendword", cells: [17, 40, 17] },
+  { text: "ble", position: "midendword", cells: [60] },
   { text: "eand", position: "midendword", cells: [17, 47] },
   { text: "ear", position: "always", cells: [17, 28] },
   { text: "eaway", position: "midendword", cells: [17, 1, 58, 1, 61] },
