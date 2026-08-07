@@ -5485,18 +5485,28 @@ const LIST_CHARS_PER_LINE = Math.floor((DOT_GRID_WIDTH + LIST_CHAR_GAP_DOTS) / L
 const LIST_CONTINUATION_INDENT_CHARS = 3;
 
 // § Street Abbreviation Key — the cell height reserves a 4th dot-row for 8-dot
-// computer braille (dots 7/8), but 6-dot literary braille (Grade 1/2 --
-// this list's own translated text almost always is one of those) never
-// sets that row, so it's already blank every time. An explicit 1-dot gap
-// on top of that gives 6-dot text 2 blank rows between lines total without
-// double-counting the row the content itself already leaves empty. 8-dot
-// computer braille can actually use that 4th row, so its own effective gap
-// is smaller -- expected, not re-tuned for here per explicit direction to
-// check that case separately.
+// computer braille (dots 7/8), but 6-dot literary braille (contracted or
+// uncontracted UEB) never sets that row, so it's already blank every time.
+// 8-dot computer braille needs an explicit 1-dot gap on top to keep dots
+// 7/8 of one line visually separated from dots 1-6 of the next; literary
+// braille can drop that gap entirely (0) since the row it would have
+// occupied is already blank -- no dot ever collides -- which tightens the
+// pitch from 5 to 4 and fits a full 10 lines on screen instead of 8.
+// Depends on brailleCodeSetting, so this is a function rather than a
+// constant; the setting can't change while the dialog holding these
+// values open is itself open (see streetListPages below), so reading it
+// fresh each call is equivalent to freezing it at dialog-open time.
 const LIST_LINE_HEIGHT_DOTS = 4;
-const LIST_LINE_GAP_DOTS = 1;
-const LIST_LINE_PITCH_DOTS = LIST_LINE_HEIGHT_DOTS + LIST_LINE_GAP_DOTS;
-const LIST_LINES_PER_PAGE = Math.floor((DOT_GRID_HEIGHT + LIST_LINE_GAP_DOTS) / LIST_LINE_PITCH_DOTS);
+function currentListLineGapDots() {
+  return brailleCodeSetting === 'computer8' ? 1 : 0;
+}
+function currentListLinePitchDots() {
+  return LIST_LINE_HEIGHT_DOTS + currentListLineGapDots();
+}
+function currentListLinesPerPage() {
+  const gap = currentListLineGapDots();
+  return Math.floor((DOT_GRID_HEIGHT + gap) / (LIST_LINE_HEIGHT_DOTS + gap));
+}
 
 // § Street Abbreviation Key — wraps one entry's cells (a 3-cell prefix --
 // either a street's label or 3 blank placeholder cells for a POI's marker
@@ -5578,14 +5588,15 @@ function buildStreetListHeaderLines() {
   return lines;
 }
 
-// § Street Abbreviation Key — groups physical lines into LIST_LINES_PER_PAGE-
+// § Street Abbreviation Key — groups physical lines into currentListLinesPerPage()-
 // line screens (what dots 4+5+6 / 1+2+3 page between). Always at least one
 // page, even if it's empty, so sendStreetListPageToDevice has something to
 // render (a blank display) instead of needing its own empty-list check.
 function pageStreetListLines(lines) {
+  const linesPerPage = currentListLinesPerPage();
   const pages = [];
-  for (let i = 0; i < lines.length; i += LIST_LINES_PER_PAGE) {
-    pages.push(lines.slice(i, i + LIST_LINES_PER_PAGE));
+  for (let i = 0; i < lines.length; i += linesPerPage) {
+    pages.push(lines.slice(i, i + linesPerPage));
   }
   return pages.length > 0 ? pages : [[]];
 }
@@ -5607,14 +5618,14 @@ function cellDotPositions(byte) {
 }
 
 // § Street Abbreviation Key — draws one physical line into the pixel buffer at
-// its row (rowIndex * LIST_LINE_PITCH_DOTS). A continuation line's cells
-// start LIST_CONTINUATION_INDENT_CHARS columns in. A marker line skips
+// its row (rowIndex * currentListLinePitchDots()). A continuation line's
+// cells start LIST_CONTINUATION_INDENT_CHARS columns in. A marker line skips
 // decoding its first 3 (blank) cells as characters and instead draws the
 // real 3x3 POI marker (drawSquarePixels -- the exact same glyph the map
 // itself uses) centered in that same 3-character footprint, per explicit
 // direction to reuse the actual marker rather than a braille stand-in.
 function drawStreetListLineToPixels(pixels, w, h, line, rowIndex, scaleX, scaleY) {
-  const rowY = rowIndex * LIST_LINE_PITCH_DOTS;
+  const rowY = rowIndex * currentListLinePitchDots();
   const colOffset = line.continuation ? LIST_CONTINUATION_INDENT_CHARS : 0;
   const startCellIndex = line.marker ? 3 : 0;
   if (line.marker) {
