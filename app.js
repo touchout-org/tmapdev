@@ -5722,6 +5722,7 @@ function openStreetListDialog() {
   streetListPages = pageStreetListLines(lines);
   streetListPageIndex = 0;
   sendStreetListPageToDevice();
+  setMessage('Visible Streets');
   streetListDialog.showModal();
 }
 
@@ -5730,9 +5731,13 @@ btnStreetListClose.addEventListener('click', () => streetListDialog.close());
 // § Street Abbreviation Key — fires on every close path (Close button,
 // Escape, or the dots-1-6 combo below), so the map is put back on the
 // device exactly once no matter which one the user used, per the "keep the
-// map ready to display again when the list is dismissed" requirement.
+// map ready to display again when the list is dismissed" requirement. The
+// message display is a separate physical region from the tactile graphic
+// (see § Message display architecture), so it needs its own explicit
+// clear here rather than being reset as a side effect of sendGraphicToDevice.
 streetListDialog.addEventListener('close', () => {
   if (currentDevice) sendGraphicToDevice(currentDevice);
+  setMessage('');
 });
 
 const FORM_CONTROL_TAGS = new Set(['INPUT', 'SELECT', 'TEXTAREA']);
