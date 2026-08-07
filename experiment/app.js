@@ -246,15 +246,36 @@ function formatMatchedLocation(place) {
   return parts.length ? parts.join(', ') : place.display_name;
 }
 
+// Both Overpass and Postpass are public, shared, rate-limited services --
+// an occasional stalled connection or slow response is normal traffic,
+// not a real outage (confirmed 2026-08-07: a query that hung for 20s+
+// succeeded immediately on a bare retry). FETCH_TIMEOUT_MS bounds how
+// long a single attempt can hang before giving up on it; fetchWithRetry
+// gives every fetch one automatic second attempt before surfacing an
+// error to the UI. Deliberately simpler than production's full
+// backoff/analytics-logging machinery (see fetchFromPostpassWithRetry in
+// tmapdev's own app.js) -- this is a data-exploration sandbox, not the
+// live app.
+const FETCH_TIMEOUT_MS = 20000;
+
+async function fetchWithRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    return await fn();
+  }
+}
+
 async function fetchWays(bbox) {
-  return dataSource === 'postpass' ? fetchWaysFromPostpass(bbox) : fetchWaysFromOverpass(bbox);
+  return fetchWithRetry(() => (dataSource === 'postpass' ? fetchWaysFromPostpass(bbox) : fetchWaysFromOverpass(bbox)));
 }
 
 async function fetchWaysFromOverpass(bbox) {
   const query = `[out:json][timeout:25];way["highway"]["name"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});out geom;`;
   const res = await fetch(OVERPASS_URL, {
     method: 'POST',
-    body: 'data=' + encodeURIComponent(query)
+    body: 'data=' + encodeURIComponent(query),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
   });
   if (!res.ok) throw new Error('overpass-failed');
   const data = await res.json();
@@ -262,11 +283,9 @@ async function fetchWaysFromOverpass(bbox) {
 }
 
 // Ported from tmapdev's own buildPostpassQuery/adaptPostpassResponse (see
-// postpass-migration-spec.md) without the production retry/backoff/
-// analytics-logging machinery -- this is a data-exploration sandbox, not
-// the live app, so a single attempt is enough. Deliberately mirrors the
-// Overpass query above exactly (name required, no issue #19 ref rescue)
-// so the two sources stay directly comparable here.
+// postpass-migration-spec.md). Deliberately mirrors the Overpass query
+// above exactly (name required, no issue #19 ref rescue) so the two
+// sources stay directly comparable here.
 function buildPostpassWaysQuery(bbox) {
   return `SELECT osm_id, geom, tags FROM postpass_line WHERE geom && ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326) AND tags?'highway' AND tags?'name'`;
 }
@@ -276,7 +295,8 @@ async function fetchWaysFromPostpass(bbox) {
   const res = await fetch(POSTPASS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query)
+    body: 'data=' + encodeURIComponent(query),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
   });
   if (!res.ok) throw new Error('postpass-failed');
   const data = await res.json();
@@ -309,7 +329,7 @@ function flattenMultiLineString(geometry) {
 // far more data than the street-only views need.
 
 async function fetchAllTypes(bbox) {
-  return dataSource === 'postpass' ? fetchAllTypesFromPostpass(bbox) : fetchAllTypesFromOverpass(bbox);
+  return fetchWithRetry(() => (dataSource === 'postpass' ? fetchAllTypesFromPostpass(bbox) : fetchAllTypesFromOverpass(bbox)));
 }
 
 // `[~"."~"."]` is the standard Overpass QL idiom for "has at least one
@@ -321,7 +341,8 @@ async function fetchAllTypesFromOverpass(bbox) {
   const query = `[out:json][timeout:25];(node[~"."~"."](${bboxArgs});way[~"."~"."](${bboxArgs});relation[~"."~"."](${bboxArgs}););out geom;`;
   const res = await fetch(OVERPASS_URL, {
     method: 'POST',
-    body: 'data=' + encodeURIComponent(query)
+    body: 'data=' + encodeURIComponent(query),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
   });
   if (!res.ok) throw new Error('overpass-failed');
   const data = await res.json();
@@ -373,7 +394,8 @@ async function fetchAllTypesFromPostpass(bbox) {
   const res = await fetch(POSTPASS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query)
+    body: 'data=' + encodeURIComponent(query),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
   });
   if (!res.ok) throw new Error('postpass-failed');
   const data = await res.json();
@@ -466,7 +488,13 @@ async function loadAndRenderAllTypes() {
   }
 
   if (token !== allTypesRequestToken || currentView !== 'all-types') return;
-  setStatus('');
+  // Unlike the street-only views' near-instant fetch, this one routinely
+  // takes 7-10+ seconds (an unfiltered "everything tagged" query easily
+  // returns thousands of elements) -- silently clearing the status
+  // message on success would leave a screen reader user with "Loading..."
+  // followed by nothing, indistinguishable from it actually being stuck.
+  // Announcing the element count gives positive confirmation it finished.
+  setStatus(`Loaded ${elements.length} tagged feature${elements.length === 1 ? '' : 's'}.`);
   renderAllTypesView(elements);
 }
 
