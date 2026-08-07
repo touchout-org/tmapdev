@@ -5726,15 +5726,39 @@ function openStreetListDialog() {
   streetListDialog.showModal();
 }
 
-btnStreetListClose.addEventListener('click', () => streetListDialog.close());
+// § Street Abbreviation Key — the Close button and the dots-1-6 Dot Pad
+// combo both call this directly, doing the post-close cleanup (restore
+// the map to the device, clear the message display) synchronously in the
+// same task rather than relying solely on the 'close' event below.
+// Confirmed real-world bug (2026-08-07): dots-1-6 stopped restoring the
+// device display whenever the browser tab wasn't the focused/foreground
+// one, even though every other Dot Pad combo (cursor keys, panning, even
+// opening this same dialog) kept working fine unfocused. Root cause: per
+// spec, dialog.close() only closes the dialog synchronously -- firing its
+// 'close' event is a separately *queued task*, and Chrome deprioritizes
+// queued tasks in backgrounded tabs. Every other Dot Pad command does its
+// real work directly inside the BLE notification callback with no such
+// queued step, so backgrounding never affected them. Reproduced directly:
+// even a bare, freshly-created <dialog> with nothing else attached fails
+// to fire 'close' when closed programmatically in an unfocused/automated
+// context -- confirming this is the queued-task mechanism itself, not
+// anything specific to this dialog or its listener.
+function closeStreetListDialog() {
+  streetListDialog.close();
+  if (currentDevice) sendGraphicToDevice(currentDevice);
+  setMessage('');
+}
 
-// § Street Abbreviation Key — fires on every close path (Close button,
-// Escape, or the dots-1-6 combo below), so the map is put back on the
-// device exactly once no matter which one the user used, per the "keep the
-// map ready to display again when the list is dismissed" requirement. The
-// message display is a separate physical region from the tactile graphic
-// (see § Message display architecture), so it needs its own explicit
-// clear here rather than being reset as a side effect of sendGraphicToDevice.
+btnStreetListClose.addEventListener('click', closeStreetListDialog);
+
+// § Street Abbreviation Key — still needed as a fallback for the one close
+// path with no explicit call site to hook into: the native Escape key,
+// handled entirely by the browser's own built-in dialog-cancel behavior.
+// That path is unaffected by the backgrounded-tab issue above, since real
+// keyboard input can only ever reach the already-focused tab in the first
+// place. Harmless if this and closeStreetListDialog's inline cleanup both
+// run for the same close (redundant device/message writes, not incorrect
+// ones).
 streetListDialog.addEventListener('close', () => {
   if (currentDevice) sendGraphicToDevice(currentDevice);
   setMessage('');
@@ -6346,7 +6370,7 @@ sdk.setCallBack(
     // 5+6 close it; every other Dot Pad combo is suppressed, same reasoning
     // as the keyboard guard above.
     if (streetListDialog.open) {
-      if (byte6 === 0x3F) streetListDialog.close();
+      if (byte6 === 0x3F) closeStreetListDialog();
       else if (byte6 === 0x38) showNextStreetListPage();
       else if (byte6 === 0x07) showPreviousStreetListPage();
       return;
