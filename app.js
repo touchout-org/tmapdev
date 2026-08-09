@@ -1937,7 +1937,10 @@ async function runRegionSearch(query) {
     setMessage('No results');
     return;
   }
-  await createNewRegionAnchor(place, query);
+  // § Analytics — same country plumbing as proceedWithPlace above, carried
+  // through to fetchRegionRoads() for overpassLogs' country field.
+  const country = (place.address && place.address.country) || null;
+  await createNewRegionAnchor(place, query, country);
 }
 
 // § Regional Maps — mirrors createNewAnchor above: regionBoundingBox
@@ -1948,14 +1951,14 @@ async function runRegionSearch(query) {
 // street address's house-number-only short form does), and
 // applyScaleLadderForMapType('region') so the Scale setting switches to
 // Regional's own ladder before showAnchor resets scaleIndex to its default.
-async function createNewRegionAnchor(place, query) {
+async function createNewRegionAnchor(place, query, country) {
   const lat = parseFloat(place.lat);
   const lon = parseFloat(place.lon);
   const name = formatCityState(place);
   const bbox = regionBoundingBox(lat, lon);
   let ways;
   try {
-    ways = await fetchRegionRoads(bbox);
+    ways = await fetchRegionRoads(bbox, country);
   } catch (err) {
     setMessage(humanizeOsmError(err, 'street-data'));
     return;
@@ -2002,7 +2005,7 @@ async function loadMapRecord(record, cachedWays) {
     try {
       // No fresh geocode result here (this is a saved-map reload, not a new
       // search) -- overpassLogs' country field is left null for this call.
-      ways = isRegion ? await fetchRegionRoads(bbox) : await fetchWays(bbox, record.searchQuery, null);
+      ways = isRegion ? await fetchRegionRoads(bbox, null) : await fetchWays(bbox, record.searchQuery, null);
     } catch (err) {
       setMessage(humanizeOsmError(err, 'street-data'));
       return;
@@ -3583,8 +3586,14 @@ function formatDistance(distFt) {
 // dataSource/attempt/requestId (spec §4.6) default to plain Overpass
 // values so fetchWays()'s existing single-attempt Overpass call sites
 // don't need editing to get a consistent schema -- only
-// fetchFromPostpassWithRetry below passes them explicitly.
-function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpass', attempt = 1, requestId = null }) {
+// fetchFromPostpassWithRetry below passes them explicitly. mapType
+// defaults to 'street' for the same reason (every call site that isn't
+// Regional Maps is a street-map fetch). payloadSizeBytes is null unless
+// the caller could actually measure the response body -- true for every
+// live call site below, but left nullable so a future call site that
+// can't measure it (or an error path with no body) doesn't need a fake
+// value.
+function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpass', attempt = 1, requestId = null, mapType = 'street', payloadSizeBytes = null }) {
   addDoc(collection(db, 'overpassLogs'), {
     uid: auth.currentUser ? auth.currentUser.uid : null,
     timestamp: serverTimestamp(),
@@ -3594,7 +3603,9 @@ function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpas
     buildId: BUILD_ID,
     dataSource,
     attempt,
-    requestId
+    requestId,
+    mapType,
+    payloadSizeBytes
   }).catch((err) => console.error('overpass log write failed:', err));
 }
 
@@ -3635,16 +3646,18 @@ async function fetchWays(bbox, searchQuery, country) {
     logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: kind, country });
     throw new OsmFetchError(kind, res.status);
   }
-  const data = await res.json();
+  const text = await res.text();
+  const payloadSizeBytes = new TextEncoder().encode(text).length;
+  const data = JSON.parse(text);
   // Overpass can return HTTP 200 with an empty/partial result and a
   // `remark` field describing a server-side failure (e.g. a query timeout)
   // -- this wouldn't trip res.ok at all, and used to render as a silent
   // "no streets here" instead of surfacing the real cause.
   if (data.remark) {
-    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: 'timeout', country });
+    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: 'timeout', country, payloadSizeBytes });
     throw new OsmFetchError('timeout');
   }
-  logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: null, country });
+  logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: null, country, payloadSizeBytes });
   return data.elements || [];
 }
 
@@ -3723,10 +3736,12 @@ async function fetchPostpassOnce(query, timeoutMs) {
   if (!res.ok) {
     throw new OsmFetchError(classifyHttpFailure(res.status), res.status);
   }
-  const data = await res.json();
+  const text = await res.text();
+  const payloadSizeBytes = new TextEncoder().encode(text).length;
+  const data = JSON.parse(text);
   const softFailure = checkPostpassSoftFailure(data);
   if (softFailure) throw new OsmFetchError('server-error', res.status);
-  return adaptPostpassResponse(data);
+  return { ways: adaptPostpassResponse(data), payloadSizeBytes };
 }
 
 // The proposed retry model (spec §4.4): a 25s total budget across all
@@ -3748,8 +3763,8 @@ async function fetchFromPostpassWithRetry(bbox, requestId, country) {
     const attemptTimeout = Math.max(1, Math.min(POSTPASS_ATTEMPT_TIMEOUT_MS, remainingMs));
     const attemptStart = Date.now();
     try {
-      const ways = await fetchPostpassOnce(query, attemptTimeout);
-      logOverpassQuery({ elapsedMs: Date.now() - attemptStart, errorType: null, country, dataSource: 'postpass', attempt, requestId });
+      const { ways, payloadSizeBytes } = await fetchPostpassOnce(query, attemptTimeout);
+      logOverpassQuery({ elapsedMs: Date.now() - attemptStart, errorType: null, country, dataSource: 'postpass', attempt, requestId, payloadSizeBytes });
       return ways;
     } catch (err) {
       lastError = err;
@@ -3763,21 +3778,21 @@ async function fetchFromPostpassWithRetry(bbox, requestId, country) {
   throw lastError;
 }
 
-// § Regional Maps — roads-only v1 fetch. Two queries, both proven out in
+// § Regional Maps — roads-only v1 fetch. Originally two queries (motorway/
+// trunk merged by ref, plus a separate primary-roads query); the primary
+// query was dropped after 2026-08 hardware testing showed real complexity
+// at large scales in dense regions even with only major highways on
+// screen -- see project memory. Single remaining query, proven out in
 // admin/benchmark/regional-map-postpass.mjs against the real 600x400 mi
-// box before being ported here:
-//
-//   1. Motorway/trunk, merged by ref (ST_Union + ST_LineMerge) before any
-//      length decision, then simplified -- 170 features / 225 KB in
-//      testing vs. 22,249 unfiltered. Segments with no ref tag (~1,006 in
-//      testing) are dropped entirely for this v1, not given their own
-//      handling yet.
-//   2. Primary roads, flat length_m floor, simplified.
+// box before being ported here: motorway/trunk, merged by ref (ST_Union +
+// ST_LineMerge) before any length decision, then simplified -- 170
+// features / 225 KB in testing vs. 22,249 unfiltered. Segments with no
+// ref tag (~1,006 in testing) are dropped entirely for this v1, not given
+// their own handling yet.
 //
 // Single-attempt fetch (no retry/backoff) -- deliberately simpler than
 // fetchFromPostpassWithRetry above; this is a quick-and-dirty first look,
-// not hardened yet. Both queries run in parallel.
-const REGION_LENGTH_THRESHOLD_M = 3219; // 2 mi, Minimum Feature Size @ Regional's smallest scale (1 mi/in) -- see Map Types.md
+// not hardened yet.
 const REGION_SIMPLIFY_TOLERANCE_DEGREES = 0.0015; // ~166 m, one dot's real-world width @ 1 mi/in -- see Map Types.md
 
 function regionEnvelopeSql(bbox) {
@@ -3790,12 +3805,6 @@ function buildRegionMergedHighwayQuery(bbox) {
     `ST_SimplifyPreserveTopology(ST_LineMerge(ST_Union(ST_Intersection(geom, ${envelope}))), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
     `FROM postpass_line WHERE geom && ${envelope} AND tags->>'highway' IN ('motorway','trunk') AND tags ? 'ref' ` +
     `GROUP BY tags->>'ref'`;
-}
-
-function buildRegionPrimaryQuery(bbox) {
-  const envelope = regionEnvelopeSql(bbox);
-  return `SELECT osm_id, tags, ST_Simplify(ST_Intersection(geom, ${envelope}), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
-    `FROM postpass_line WHERE geom && ${envelope} AND tags->>'highway' = 'primary' AND length_m >= ${REGION_LENGTH_THRESHOLD_M}`;
 }
 
 // A single GeoJSON LineString/MultiLineString ring converted to this app's
@@ -3841,42 +3850,39 @@ function adaptRegionMergedHighwayResponse(geoJson) {
   return ways;
 }
 
-// Deliberately NOT adaptPostpassResponse/flattenMultiLineString: those
-// assume Postpass always wraps line geometry as MultiLineString (true for
-// the plain, unprocessed postpass_line query fetchWays() uses -- see
-// flattenMultiLineString's own "2,601 ways sampled, zero multi-part"
-// comment). That assumption breaks once ST_Intersection/ST_Simplify are
-// in the query (as they are for every Regional Maps query): clipping or
-// simplifying can collapse a MultiLineString down to a plain LineString.
-// flattenMultiLineString then misreads a LineString's coordinate array
-// (a flat list of [lon,lat] pairs) as if it were a MultiLineString's list
-// of *parts* -- .coordinates[0] becomes a single [lon,lat] pair, and
-// mapping ([lon,lat]) => ... over that pair's own two numbers throws
-// "number is not iterable" trying to destructure a raw coordinate.
-// geometryToPointArrays (used by adaptRegionMergedHighwayResponse above)
-// already handles both geometry types correctly -- reused here instead.
-function adaptRegionPrimaryResponse(geoJson) {
-  const ways = [];
-  for (const f of geoJson.features) {
-    const parts = geometryToPointArrays(f.geometry);
-    for (const geometry of parts) {
-      if (geometry.length < 2) continue;
-      ways.push({ type: 'way', id: f.properties.osm_id, tags: f.properties.tags || {}, geometry });
-    }
+// Single-attempt fetch with its own analytics logging (mirrors
+// fetchWays'/fetchPostpassOnce's win-or-lose logging, just without the
+// retry loop -- see the "quick-and-dirty first look" comment above).
+// mapType is always 'region' here since this is only ever called for
+// Regional Maps.
+async function fetchRegionSql(query, country, requestId) {
+  const fetchStart = Date.now();
+  let res;
+  try {
+    res = await fetch(POSTPASS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'data=' + encodeURIComponent(query),
+      signal: AbortSignal.timeout(POSTPASS_TOTAL_TIMEOUT_MS)
+    });
+  } catch (err) {
+    const kind = err.name === 'TimeoutError' ? 'timeout' : 'network';
+    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: kind, country, dataSource: 'postpass', requestId, mapType: 'region' });
+    throw new OsmFetchError(kind);
   }
-  return ways;
-}
-
-async function fetchRegionSql(query) {
-  const res = await fetch(POSTPASS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'data=' + encodeURIComponent(query),
-    signal: AbortSignal.timeout(POSTPASS_TOTAL_TIMEOUT_MS)
-  });
-  if (!res.ok) throw new OsmFetchError(classifyHttpFailure(res.status), res.status);
-  const data = await res.json();
-  if (checkPostpassSoftFailure(data)) throw new OsmFetchError('server-error', res.status);
+  if (!res.ok) {
+    const kind = classifyHttpFailure(res.status);
+    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: kind, country, dataSource: 'postpass', requestId, mapType: 'region' });
+    throw new OsmFetchError(kind, res.status);
+  }
+  const text = await res.text();
+  const payloadSizeBytes = new TextEncoder().encode(text).length;
+  const data = JSON.parse(text);
+  if (checkPostpassSoftFailure(data)) {
+    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: 'server-error', country, dataSource: 'postpass', requestId, mapType: 'region', payloadSizeBytes });
+    throw new OsmFetchError('server-error', res.status);
+  }
+  logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: null, country, dataSource: 'postpass', requestId, mapType: 'region', payloadSizeBytes });
   return data;
 }
 
@@ -3886,12 +3892,14 @@ async function fetchRegionSql(query) {
 // ref-substitution step twice and corrupt honorificName (second pass would
 // save the already-substituted ref as "the original name" before
 // resubstituting). Same reason fetchWays() doesn't call it either.
-async function fetchRegionRoads(bbox) {
-  const [mergedHighways, primaryRoads] = await Promise.all([
-    fetchRegionSql(buildRegionMergedHighwayQuery(bbox)).then(adaptRegionMergedHighwayResponse),
-    fetchRegionSql(buildRegionPrimaryQuery(bbox)).then(adaptRegionPrimaryResponse)
-  ]);
-  return [...mergedHighways, ...primaryRoads];
+//
+// country mirrors fetchWays'/createNewAnchor's own country plumbing (see
+// logOverpassQuery's country field) -- null on a loadMapRecord reload,
+// same as fetchWays' own null-country call site, since there's no fresh
+// geocode result to pull it from there either.
+async function fetchRegionRoads(bbox, country) {
+  const requestId = crypto.randomUUID();
+  return adaptRegionMergedHighwayResponse(await fetchRegionSql(buildRegionMergedHighwayQuery(bbox), country, requestId));
 }
 
 // § Major highway ref substitution (issue #19) — most people know a major
