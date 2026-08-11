@@ -5197,6 +5197,23 @@ function distanceToSegment(px, py, x0, y0, x1, y1) {
   return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
 }
 
+// § Honorary highway names — appends a major highway's original OSM name
+// (see processWays' honorificName, issue #19) in parens after its already-
+// compacted display name, e.g. "I80 (Bay Bridge)". Deliberately a display-
+// time-only append: honorificName is never fed through compactFeatureName/
+// classifyNameWords (the same pipeline that drives on-map braille labels
+// via assignBrailleLabels) since real honorific names routinely contain
+// words like "Highway"/"Freeway" that pipeline is built to detect and
+// abbreviate, and it has no handling for parenthetical punctuation --
+// baking this into tags.name itself would risk corrupting both that
+// abbreviation and on-map labels no one's asked to change yet. Skips
+// silently if there's no honorific (common -- Regional's merged-highway
+// query doesn't always recover a name) or if it's identical to the name
+// already shown (avoids "I80 (I80)").
+function appendHonorific(displayName, honorificName) {
+  return honorificName && honorificName !== displayName ? `${displayName} (${honorificName})` : displayName;
+}
+
 // § Cursor and hit testing — streets within CURSOR_HIT_RADIUS grid units of
 // the cursor's center are "current." Unique names only, joined with " & ".
 function currentObjectNames() {
@@ -5204,6 +5221,9 @@ function currentObjectNames() {
   const cursorGrid = cursorGridPosition(viewportBbox);
   if (!cursorGrid) return null;
   const names = new Set();
+  // § Honorary highway names — name -> honorificName, filled alongside
+  // names below (first hit wins, same as the Set's own natural dedup).
+  const honorifics = new Map();
   // § Editing the Map — a street hidden via the Edit Map dialog isn't
   // "feelable" via the cursor either.
   const ways = visibleWays();
@@ -5217,6 +5237,7 @@ function currentObjectNames() {
         const d = distanceToSegment(cursorGrid.x, cursorGrid.y, prev.x, prev.y, p.x, p.y);
         if (d <= CURSOR_HIT_RADIUS) {
           names.add(name);
+          if (!honorifics.has(name)) honorifics.set(name, way.tags.honorificName || '');
           break;
         }
       }
@@ -5241,9 +5262,12 @@ function currentObjectNames() {
   // announced in compacted form (stem + type, e.g. "9th St"); with multiple
   // features, only the compacted stem is used for each (no type), joined
   // by " and ", to keep the message from ballooning with repeated
-  // street-type words when several names are packed together.
+  // street-type words when several names are packed together. Honorific
+  // names (see appendHonorific above) are only ever shown in the
+  // single-feature case, for the same reason -- an intersection
+  // announcement is already deliberately compacted.
   if (nameList.length === 1) {
-    return compactedDisplayName(nameList[0]);
+    return appendHonorific(compactedDisplayName(nameList[0]), honorifics.get(nameList[0]));
   }
   // § Cursor and hit testing — sorted alphabetically by stem (not left in
   // whatever order the hit-test scan happened to find them) so the exact
@@ -5806,14 +5830,19 @@ function computeVisibleStreetListEntries() {
   const pois = visiblePois().filter((poi) => poiInViewport(poi, viewportBbox));
 
   const visibleNames = new Set();
+  // § Honorary highway names — see appendHonorific/currentObjectNames.
+  const honorifics = new Map();
   for (const way of visibleWays()) {
     const name = way.tags && way.tags.name;
-    if (name && wayIntersectsViewport(way, viewportBbox)) visibleNames.add(name);
+    if (name && wayIntersectsViewport(way, viewportBbox)) {
+      visibleNames.add(name);
+      if (!honorifics.has(name)) honorifics.set(name, way.tags.honorificName || '');
+    }
   }
   const labels = assignBrailleLabels(allNamesSorted());
   const streets = Array.from(visibleNames)
     .sort((a, b) => a.localeCompare(b))
-    .map((name) => ({ label: labels.get(name) || '', name: compactedDisplayName(name) }));
+    .map((name) => ({ label: labels.get(name) || '', name: appendHonorific(compactedDisplayName(name), honorifics.get(name)) }));
 
   return { pois, streets };
 }
