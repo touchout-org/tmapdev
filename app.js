@@ -3970,7 +3970,16 @@ function processWays(rawWays) {
   for (const way of rawWays) {
     way.tier = HIGHWAY_TIERS[way.tags && way.tags.highway] || MAX_TIER;
     const ref = way.tags && way.tags.ref && way.tags.ref.trim();
-    if (way.tier === 1 && ref) {
+    // 'honorificName' in way.tags guards against a second processWays()
+    // pass over the same (already-mutated) way objects -- showAnchor
+    // caches lastRawWays to IndexedDB *after* this function has already
+    // run and mutated it in place (processWays returns rawWays itself,
+    // not a copy), then runs processWays again on that same data on every
+    // page-reload/current-map restore. Without this guard, the second
+    // pass overwrites honorificName with the already-substituted ref
+    // (name is already "I80" by then), silently destroying the real
+    // honorific -- confirmed via a real restore-from-cache test 2026-08-09.
+    if (way.tier === 1 && ref && !('honorificName' in way.tags)) {
       way.tags.honorificName = way.tags.name;
       way.tags.name = humanizeRef(ref);
     }
@@ -5199,19 +5208,23 @@ function distanceToSegment(px, py, x0, y0, x1, y1) {
 
 // § Honorary highway names — appends a major highway's original OSM name
 // (see processWays' honorificName, issue #19) in parens after its already-
-// compacted display name, e.g. "I80 (Bay Bridge)". Deliberately a display-
-// time-only append: honorificName is never fed through compactFeatureName/
-// classifyNameWords (the same pipeline that drives on-map braille labels
-// via assignBrailleLabels) since real honorific names routinely contain
-// words like "Highway"/"Freeway" that pipeline is built to detect and
-// abbreviate, and it has no handling for parenthetical punctuation --
-// baking this into tags.name itself would risk corrupting both that
-// abbreviation and on-map labels no one's asked to change yet. Skips
-// silently if there's no honorific (common -- Regional's merged-highway
-// query doesn't always recover a name) or if it's identical to the name
-// already shown (avoids "I80 (I80)").
+// compacted display name, e.g. "I80 (Bay Bridge)". The honorific text
+// itself IS run through compactedDisplayName -- real honorific names
+// routinely contain words like "Highway"/"Freeway" and compacting those
+// (e.g. "Junipero Serra Freeway" -> "Junipero Serra Fwy") is wanted here,
+// same as it is for an ordinary street name. What's still deliberately
+// avoided is feeding the *combined*, parens-wrapped result back through
+// compactFeatureName/classifyNameWords a second time (that pipeline has
+// no handling for parenthetical punctuation, and also drives on-map
+// braille labels via assignBrailleLabels) -- honorificName is compacted
+// on its own, in isolation, before the parens go on, and tags.name itself
+// stays untouched. Skips silently if there's no honorific (common --
+// Regional's merged-highway query doesn't always recover a name) or if
+// it's identical to the name already shown (avoids "I80 (I80)").
 function appendHonorific(displayName, honorificName) {
-  return honorificName && honorificName !== displayName ? `${displayName} (${honorificName})` : displayName;
+  return honorificName && honorificName !== displayName
+    ? `${displayName} (${compactedDisplayName(honorificName)})`
+    : displayName;
 }
 
 // § Cursor and hit testing — streets within CURSOR_HIT_RADIUS grid units of
