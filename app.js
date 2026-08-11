@@ -944,17 +944,36 @@ let messageWindowCells = [];
 let messageWindowChunkStarts = [0];
 let messageWindowChunkIndex = 0;
 
+// § Street Abbreviation Key — break characters for wrapping a street-list
+// entry's translated name, beyond the message window's space-only default
+// (see translateCurrentCodeWithBreaks below). Widened 2026-08-10 so long
+// hyphenated names (e.g. "Richmond-San Rafael Bridge") and comma-joined
+// concurrent route designations (e.g. "I80,I580") can still chunk onto a
+// continuation line even when the whitespace-only rule would have treated
+// them as one unbreakable token. Message-window chunking (scrolling
+// message announcements) deliberately keeps the space-only default --
+// this widening is scoped to the street list only, not requested there.
+const STREET_LIST_BREAK_CHARS = [' ', ',', '.', '-'];
+
+function escapeRegExpChar(ch) {
+  return ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // § Message display architecture — translates text into cell bitmasks
 // under the current brailleCodeSetting, and separately records every
-// cell-index where a new word begins (i.e. right after a space), which
-// is where a chunk boundary is allowed to fall. Splitting the source
-// text at each space and translating the pieces individually rather
-// than translating the whole string at once gives an identical cell
-// sequence -- none of the three codes' translation logic depends on
-// what's on the other side of a space -- while exposing exactly the
-// boundary information chunking needs.
-function translateCurrentCodeWithBreaks(text) {
-  const segments = text.split(/( )/);
+// cell-index right after a break character, which is where a chunk
+// boundary is allowed to fall. breakChars defaults to space-only (the
+// message window's own rule, unchanged); the street list passes a wider
+// set (see STREET_LIST_BREAK_CHARS) to also allow breaking after commas,
+// periods, and dashes. Splitting the source text at each break character
+// and translating the pieces individually rather than translating the
+// whole string at once gives an identical cell sequence -- none of the
+// three codes' translation logic depends on what's on the other side of
+// a break character -- while exposing exactly the boundary information
+// chunking needs.
+function translateCurrentCodeWithBreaks(text, breakChars = [' ']) {
+  const pattern = new RegExp('(' + breakChars.map(escapeRegExpChar).join('|') + ')');
+  const segments = text.split(pattern);
   const cells = [];
   const wordBreaks = [0];
   for (const seg of segments) {
@@ -963,7 +982,7 @@ function translateCurrentCodeWithBreaks(text) {
       : brailleCodeSetting === 'ueb2' ? translateGrade2(seg)
       : textToNabccCells(seg);
     cells.push(...segCells);
-    if (seg === ' ') wordBreaks.push(cells.length);
+    if (breakChars.includes(seg)) wordBreaks.push(cells.length);
   }
   return { cells, wordBreaks };
 }
@@ -6037,9 +6056,15 @@ function wrapEntryLines(cells, wordBreaks) {
 // setting, via the same translateCurrentCodeWithBreaks the message display
 // uses, so continuation wrapping gets real word-boundary information.
 function buildStreetListEntryLines(prefixCells, name, marker) {
-  const { cells: restCells, wordBreaks: restBreaks } = translateCurrentCodeWithBreaks('--' + name);
-  const cells = [...prefixCells, ...restCells];
-  const wordBreaks = [0, prefixCells.length, ...restBreaks.map((b) => b + prefixCells.length)];
+  // The "--" separator is translated on its own, with the message
+  // window's default space-only breaks -- STREET_LIST_BREAK_CHARS'
+  // dash-breaking must not apply to it, or a continuation line could
+  // land mid-separator (splitting "--" into a lone "-" on one line).
+  const { cells: sepCells } = translateCurrentCodeWithBreaks('--');
+  const { cells: nameCells, wordBreaks: nameBreaks } = translateCurrentCodeWithBreaks(name, STREET_LIST_BREAK_CHARS);
+  const sepOffset = prefixCells.length + sepCells.length;
+  const cells = [...prefixCells, ...sepCells, ...nameCells];
+  const wordBreaks = [0, prefixCells.length, sepOffset, ...nameBreaks.map((b) => b + sepOffset)];
   const lines = wrapEntryLines(cells, wordBreaks);
   if (marker && lines.length > 0) lines[0].marker = true;
   return lines;
