@@ -3813,12 +3813,21 @@ function regionEnvelopeSql(bbox) {
 // union: (A∪B)∩E = (A∩E)∪(B∩E)), tested 2026-08-09 as a ~4-9% speedup
 // with zero data loss against live Postpass (Dallas TX test boxes, see
 // project memory) versus clipping every fragment before the union.
+// § Bridge naming — also grouped by bridge:name (in addition to ref) so a
+// named bridge crossing merges separately from the rest of its route,
+// instead of being absorbed into one continuous ref-substituted line.
+// GROUP BY treats NULL as its own single group, so every non-bridge (and
+// every unnamed-bridge) segment of a ref still merges together exactly as
+// before -- this only splits out segments that share a real bridge:name.
+// A ref crossing two distinct named bridges gets two separate bridge
+// features automatically, one per bridge:name value. See
+// adaptRegionMergedHighwayResponse for how bridge_name overrides naming.
 function buildRegionMergedHighwayQuery(bbox) {
   const envelope = regionEnvelopeSql(bbox);
-  return `SELECT tags->>'ref' AS ref, (array_agg(tags->>'name'))[1] AS name, ` +
+  return `SELECT tags->>'ref' AS ref, tags->>'bridge:name' AS bridge_name, (array_agg(tags->>'name'))[1] AS name, ` +
     `ST_SimplifyPreserveTopology(ST_Intersection(ST_LineMerge(ST_Union(geom)), ${envelope}), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
     `FROM postpass_line WHERE geom && ${envelope} AND tags->>'highway' IN ('motorway','trunk') AND tags ? 'ref' ` +
-    `GROUP BY tags->>'ref'`;
+    `GROUP BY tags->>'ref', tags->>'bridge:name'`;
 }
 
 // A single GeoJSON LineString/MultiLineString ring converted to this app's
@@ -3846,17 +3855,28 @@ function geometryToPointArrays(geometry) {
 // two tiers are treated identically by that logic anyway (see
 // HIGHWAY_TIERS). A synthetic negative id keeps these visibly distinct
 // from any real OSM id if ever inspected.
+//
+// § Bridge naming — a bridge_name row (see buildRegionMergedHighwayQuery)
+// gets tags.name set directly to the bridge's name and deliberately no
+// ref tag at all, so processWays' ref-substitution branch (which only
+// fires when a ref is present) never touches it -- the bridge name is
+// final, not a stand-in a later step might override or annotate with an
+// honorific. Every other row (bridge_name null -- the common case) keeps
+// the normal ref tag and goes through ref-substitution exactly as before.
 function adaptRegionMergedHighwayResponse(geoJson) {
   const ways = [];
   let syntheticId = -1;
   for (const f of geoJson.features) {
     const parts = geometryToPointArrays(f.geometry);
+    const bridgeName = f.properties.bridge_name;
     for (const geometry of parts) {
       if (geometry.length < 2) continue;
       ways.push({
         type: 'way',
         id: syntheticId--,
-        tags: { highway: 'motorway', ref: f.properties.ref, name: f.properties.name || '' },
+        tags: bridgeName
+          ? { highway: 'motorway', name: bridgeName }
+          : { highway: 'motorway', ref: f.properties.ref, name: f.properties.name || '' },
         geometry
       });
     }
@@ -3969,6 +3989,24 @@ function humanizeRef(ref) {
 function processWays(rawWays) {
   for (const way of rawWays) {
     way.tier = HIGHWAY_TIERS[way.tags && way.tags.highway] || MAX_TIER;
+    // § Bridge naming — a named bridge crossing (bridge=yes + bridge:name,
+    // e.g. the SF-Oakland Bay Bridge) gets that name outright, dominating
+    // over ref-substitution/honorific naming entirely -- no "I80", no
+    // "Dwight D. Eisenhower Highway", just the bridge's own name. Only
+    // Street Maps' raw fetch ever carries these tags on an individual way
+    // (Regional's merged-highway query already resolves this at the SQL
+    // level -- see adaptRegionMergedHighwayResponse -- so its synthetic
+    // ways never reach this branch at all). Derived fresh from the
+    // immutable bridge:name tag every call, so unlike honorificName below
+    // this needs no re-run guard -- a second processWays() pass just
+    // re-derives the identical name. An unnamed bridge (bridge=yes with no
+    // bridge:name) falls through to normal naming -- nothing distinct to
+    // call it.
+    const bridgeName = way.tags && way.tags.bridge === 'yes' && way.tags['bridge:name'];
+    if (bridgeName) {
+      way.tags.name = bridgeName;
+      continue;
+    }
     const ref = way.tags && way.tags.ref && way.tags.ref.trim();
     // 'honorificName' in way.tags guards against a second processWays()
     // pass over the same (already-mutated) way objects -- showAnchor
