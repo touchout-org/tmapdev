@@ -274,15 +274,18 @@ const STREET_SCALE_PRESETS_M = [10, 25, 35, 50, 60, 120, 180, 250, 600];
 const STREET_DEFAULT_SCALE_INDEX = 3; // 400 ft / 50 m
 
 // § Map types — Regional Maps' own scale ladder (see Map Types.md), 1 mi to
-// 100 mi to the inch. Kept as raw mi/km display arrays (what
+// 50 mi to the inch (top step lowered from 100 -- see the fetch box
+// shrink below, both derived from the same "must fit the Dot Pad display
+// at the largest scale" rule, done together 2026-08-09 to keep fewer
+// elements in play at once). Kept as raw mi/km display arrays (what
 // formatScaleLabel actually prints) plus derived ft/m arrays (what every
 // existing scale-math function -- viewportSizeFeet, feetPerDot, etc. --
 // already expects), so none of that math needs to know these are really
 // miles, only formatScaleLabel does. Provisional -- see Map Types.md's own
 // note that this ladder hasn't had the calibration scrutiny the street one
 // got.
-const REGION_SCALE_MI = [1, 2, 3, 5, 10, 15, 25, 40, 60, 100];
-const REGION_SCALE_KM = [0.6, 1.2, 2, 3, 6, 10, 15, 25, 40, 60];
+const REGION_SCALE_MI = [1, 2, 3, 5, 10, 15, 25, 40, 50];
+const REGION_SCALE_KM = [0.6, 1.2, 2, 3, 6, 10, 15, 25, 30];
 const REGION_SCALE_PRESETS_FT = REGION_SCALE_MI.map((mi) => mi * 5280);
 const REGION_SCALE_PRESETS_M = REGION_SCALE_KM.map((km) => km * 1000);
 const REGION_DEFAULT_SCALE_INDEX = 0; // 1 mi / 0.6 km, Regional's nearest-in scale
@@ -3409,11 +3412,17 @@ function squareBoundingBox(lat, lon, halfSideMiles) {
   };
 }
 
-// § Regional Maps — rectangular (not square) fetch box, 600 x 400 mi total
+// § Regional Maps — rectangular (not square) fetch box, 300 x 200 mi total
 // per Map Types.md, fixed regardless of scale (unlike Street Maps' Map Size
 // setting, which Regional Maps ignore entirely -- see mapHalfSideMiles).
-const REGION_HALF_WIDTH_MILES = 300;
-const REGION_HALF_HEIGHT_MILES = 200;
+// Shrunk from the original 600 x 400 (2026-08-09) together with lowering
+// the scale ladder's top step from 100 to 50 mi/inch (REGION_SCALE_MI
+// above) -- both numbers come from the same "must fit the Dot Pad display
+// at the type's largest scale" derivation, so halving the scale halves
+// the box; done together specifically to cut down the element count/
+// response-time variance seen in production Postpass queries.
+const REGION_HALF_WIDTH_MILES = 150;
+const REGION_HALF_HEIGHT_MILES = 100;
 function regionBoundingBox(lat, lon) {
   const halfWidthMeters = REGION_HALF_WIDTH_MILES * MILES_TO_METERS;
   const halfHeightMeters = REGION_HALF_HEIGHT_MILES * MILES_TO_METERS;
@@ -3799,10 +3808,15 @@ function regionEnvelopeSql(bbox) {
   return `ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326)`;
 }
 
+// Clips once, after union+merge, instead of once per raw input row before
+// union -- mathematically identical result (intersection distributes over
+// union: (A∪B)∩E = (A∩E)∪(B∩E)), tested 2026-08-09 as a ~4-9% speedup
+// with zero data loss against live Postpass (Dallas TX test boxes, see
+// project memory) versus clipping every fragment before the union.
 function buildRegionMergedHighwayQuery(bbox) {
   const envelope = regionEnvelopeSql(bbox);
   return `SELECT tags->>'ref' AS ref, (array_agg(tags->>'name'))[1] AS name, ` +
-    `ST_SimplifyPreserveTopology(ST_LineMerge(ST_Union(ST_Intersection(geom, ${envelope}))), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
+    `ST_SimplifyPreserveTopology(ST_Intersection(ST_LineMerge(ST_Union(geom)), ${envelope}), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
     `FROM postpass_line WHERE geom && ${envelope} AND tags->>'highway' IN ('motorway','trunk') AND tags ? 'ref' ` +
     `GROUP BY tags->>'ref'`;
 }
