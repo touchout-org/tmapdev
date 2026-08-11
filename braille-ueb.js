@@ -55,6 +55,8 @@ export const UEB_PUNCTUATION = {
   "=": [16, 54],
   "!": [22],
   "?": [48, 38],
+  "(": [32, 51], // dot 6, dots 1256
+  ")": [54, 4], // dots 2356, dot 3
 };
 
 // § Grade 2 — the 23 "alphabetic wordsigns" (UEB §10.1: as, but, can, do,
