@@ -3818,16 +3818,69 @@ function regionEnvelopeSql(bbox) {
 // instead of being absorbed into one continuous ref-substituted line.
 // GROUP BY treats NULL as its own single group, so every non-bridge (and
 // every unnamed-bridge) segment of a ref still merges together exactly as
-// before -- this only splits out segments that share a real bridge:name.
-// A ref crossing two distinct named bridges gets two separate bridge
-// features automatically, one per bridge:name value. See
+// before -- this only splits out segments that resolve to a real bridge
+// name. A ref crossing two distinct named bridges gets two separate
+// bridge features automatically, one per bridge_name value. See
 // adaptRegionMergedHighwayResponse for how bridge_name overrides naming.
+//
+// § Bridge naming, widened 2026-08-10 -- most real landmark bridges
+// (Dumbarton, San Mateo-Hayward, Richmond-San Rafael, Carquinez,
+// Benicia-Martinez, all confirmed via live Bay Area testing) have no
+// dedicated bridge:name tag at all; only a couple of especially famous
+// ones (Golden Gate, the Bay Bridge) do. The common pattern is just
+// bridge=yes plus the bridge's proper name sitting in the ordinary name
+// tag. Falling back to name whenever bridge=yes is tempting but wrong --
+// tested live and it also caught ~40 ordinary freeway segments that are
+// merely routine grade-separated overpasses tagged bridge=yes for the
+// same physical-structure reason, fragmenting routes like I-80 into 5+
+// redundant same-named pieces instead of one merged line. The reliable
+// signal, confirmed against real data with zero false positives: only
+// fall back to name when it contains the word "bridge" -- every genuine
+// landmark bridge's name does, and no ordinary freeway/road name did in
+// testing. `\y` is Postgres's regex word-boundary (not `\b`).
+//
+// That signal alone still over-triggers at Regional's 300x200mi scope,
+// though: it also caught ~25 minor named creek/slough crossings and
+// interchange undercrossings scattered across a whole region (e.g.
+// "Willow Slough Bridge", "Howsley Undercrossing") -- individually
+// correctly named per OSM, but not landmarks anyone would want called
+// out on a large-area map, and they'd otherwise fragment their route
+// into many tiny same-ref pieces. Confirmed live: every genuine landmark
+// bridge's OWN combined length is 400m+ (down to Devil's Slide Bridge at
+// ~600m combined), while every minor crossing's is under 300m -- a clean
+// gap. But a per-row length_m filter doesn't work here: real major
+// bridges include short (26-28m) approach fragments right at their own
+// ends (confirmed for the Bay Bridge, Golden Gate, Richmond-San Rafael),
+// so filtering individual rows would fracture a real bridge's own edges.
+// Needs the length decision made on the GROUP's total, not any one row --
+// hence the two-pass CTE below: `candidates` tags every row with its
+// candidate bridge name (or NULL), `bridge_totals` sums length_m per
+// (ref, candidate name), and the final SELECT only keeps a candidate name
+// if its group's total clears MIN_BRIDGE_LENGTH_M -- otherwise it's
+// folded back into the same NULL/ordinary-route group every non-bridge
+// segment already uses, so its geometry is never lost, just not
+// specially named. Verified live: 122 features (down from an unfiltered
+// 147), 14 correctly-named landmark bridges, 108 distinct refs preserved
+// (no route geometry dropped).
+const BRIDGE_CANDIDATE_NAME_SQL_EXPR =
+  `CASE WHEN tags->>'bridge' = 'yes' AND tags ? 'bridge:name' THEN tags->>'bridge:name' ` +
+  `WHEN tags->>'bridge' = 'yes' AND tags->>'name' ~* '\\ybridge\\y' THEN tags->>'name' ` +
+  `ELSE NULL END`;
+const MIN_BRIDGE_LENGTH_M = 400;
 function buildRegionMergedHighwayQuery(bbox) {
   const envelope = regionEnvelopeSql(bbox);
-  return `SELECT tags->>'ref' AS ref, tags->>'bridge:name' AS bridge_name, (array_agg(tags->>'name'))[1] AS name, ` +
-    `ST_SimplifyPreserveTopology(ST_Intersection(ST_LineMerge(ST_Union(geom)), ${envelope}), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
+  const finalBridgeNameExpr = `CASE WHEN bt.total_len >= ${MIN_BRIDGE_LENGTH_M} THEN c.candidate_bridge_name ELSE NULL END`;
+  return `WITH candidates AS ( ` +
+    `SELECT geom, length_m, tags->>'ref' AS ref, tags->>'name' AS name, ${BRIDGE_CANDIDATE_NAME_SQL_EXPR} AS candidate_bridge_name ` +
     `FROM postpass_line WHERE geom && ${envelope} AND tags->>'highway' IN ('motorway','trunk') AND tags ? 'ref' ` +
-    `GROUP BY tags->>'ref', tags->>'bridge:name'`;
+    `), bridge_totals AS ( ` +
+    `SELECT ref, candidate_bridge_name, SUM(length_m) AS total_len FROM candidates ` +
+    `WHERE candidate_bridge_name IS NOT NULL GROUP BY ref, candidate_bridge_name ` +
+    `) ` +
+    `SELECT c.ref, ${finalBridgeNameExpr} AS bridge_name, (array_agg(c.name))[1] AS name, ` +
+    `ST_SimplifyPreserveTopology(ST_Intersection(ST_LineMerge(ST_Union(c.geom)), ${envelope}), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
+    `FROM candidates c LEFT JOIN bridge_totals bt ON bt.ref = c.ref AND bt.candidate_bridge_name = c.candidate_bridge_name ` +
+    `GROUP BY c.ref, ${finalBridgeNameExpr}`;
 }
 
 // A single GeoJSON LineString/MultiLineString ring converted to this app's
@@ -3995,14 +4048,26 @@ function processWays(rawWays) {
     // "Dwight D. Eisenhower Highway", just the bridge's own name. Only
     // Street Maps' raw fetch ever carries these tags on an individual way
     // (Regional's merged-highway query already resolves this at the SQL
-    // level -- see adaptRegionMergedHighwayResponse -- so its synthetic
-    // ways never reach this branch at all). Derived fresh from the
-    // immutable bridge:name tag every call, so unlike honorificName below
-    // this needs no re-run guard -- a second processWays() pass just
-    // re-derives the identical name. An unnamed bridge (bridge=yes with no
-    // bridge:name) falls through to normal naming -- nothing distinct to
+    // level -- see adaptRegionMergedHighwayResponse/BRIDGE_NAME_SQL_EXPR --
+    // so its synthetic ways never reach this branch at all). Derived fresh
+    // from immutable tags every call, so unlike honorificName below this
+    // needs no re-run guard -- a second processWays() pass just re-derives
+    // the identical name.
+    //
+    // Widened 2026-08-10 to also match BRIDGE_NAME_SQL_EXPR's fallback:
+    // most real landmark bridges (Dumbarton, Richmond-San Rafael, etc.)
+    // have no dedicated bridge:name tag at all, just bridge=yes plus their
+    // proper name in the ordinary name tag -- see that constant's own
+    // comment for why a blanket "bridge=yes -> use name" fallback is
+    // wrong (over-triggers on routine overpasses) and why requiring the
+    // word "bridge" in the name is the reliable signal instead. An
+    // unnamed bridge, or a bridge=yes overpass whose name doesn't contain
+    // "bridge", falls through to normal naming -- nothing distinct to
     // call it.
-    const bridgeName = way.tags && way.tags.bridge === 'yes' && way.tags['bridge:name'];
+    const rawName = way.tags && way.tags.name;
+    const bridgeName =
+      way.tags && way.tags.bridge === 'yes' &&
+      (way.tags['bridge:name'] || (rawName && /\bbridge\b/i.test(rawName) ? rawName : null));
     if (bridgeName) {
       way.tags.name = bridgeName;
       continue;
