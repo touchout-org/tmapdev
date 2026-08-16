@@ -254,8 +254,8 @@ const LABEL_ZONE_DOT_ROWS = 5;
 // SVG_WIDTH:SVG_HEIGHT below, so height is still derived from width via
 // that fixed ratio rather than tracked separately). Works out to ~9.7 dots
 // per inch on both axes -- close enough to call it 10 DPI.
-const STREET_SCALE_PRESETS_FT = [100, 200, 300, 400, 500, 1000, 1500, 2000, 5000];
-// § Settings — the Metric counterpart of STREET_SCALE_PRESETS_FT ("1 cm = Y m"),
+const SCALE_PRESETS_FT = [100, 200, 300, 400, 500, 1000, 1500, 2000, 5000];
+// § Settings — the Metric counterpart of SCALE_PRESETS_FT ("1 cm = Y m"),
 // chosen as the closest clean round-number ladder to each Imperial preset's
 // *actual real-world footprint*, not to its raw ft number -- since the
 // physical device is fixed in inches, "1 cm = Y m" and "1 in = X ft" only
@@ -265,41 +265,13 @@ const STREET_SCALE_PRESETS_FT = [100, 200, 300, 400, 500, 1000, 1500, 2000, 5000
 // rounded to a nearby clean number (within ~5%, except the smallest preset
 // at ~17%) -- see viewportSizeFeet, which is what actually applies
 // whichever ladder is current, not just the label. Same length/index
-// meaning as STREET_SCALE_PRESETS_FT so scaleIndex stays valid switching either
+// meaning as SCALE_PRESETS_FT so scaleIndex stays valid switching either
 // direction; per an explicit user decision, the two ladders are
 // independent round-number sets rather than exact conversions of each
 // other, so the real-world map footprint does shift slightly (by whatever
 // the rounding introduced) when Units is toggled.
-const STREET_SCALE_PRESETS_M = [10, 25, 35, 50, 60, 120, 180, 250, 600];
-const STREET_DEFAULT_SCALE_INDEX = 3; // 400 ft / 50 m
-
-// § Map types — Regional Maps' own scale ladder (see Map Types.md), 1 mi to
-// 50 mi to the inch (top step lowered from 100 -- see the fetch box
-// shrink below, both derived from the same "must fit the Dot Pad display
-// at the largest scale" rule, done together 2026-08-09 to keep fewer
-// elements in play at once). Kept as raw mi/km display arrays (what
-// formatScaleLabel actually prints) plus derived ft/m arrays (what every
-// existing scale-math function -- viewportSizeFeet, feetPerDot, etc. --
-// already expects), so none of that math needs to know these are really
-// miles, only formatScaleLabel does. Provisional -- see Map Types.md's own
-// note that this ladder hasn't had the calibration scrutiny the street one
-// got.
-const REGION_SCALE_MI = [1, 2, 3, 5, 10, 15, 25, 40, 50];
-const REGION_SCALE_KM = [0.6, 1.2, 2, 3, 6, 10, 15, 25, 30];
-const REGION_SCALE_PRESETS_FT = REGION_SCALE_MI.map((mi) => mi * 5280);
-const REGION_SCALE_PRESETS_M = REGION_SCALE_KM.map((km) => km * 1000);
-const REGION_DEFAULT_SCALE_INDEX = 0; // 1 mi / 0.6 km, Regional's nearest-in scale
-
-// § Map types — which scale ladder is currently active. These are `let`,
-// reassigned by applyScaleLadderForMapType (not read through a per-call
-// lookup), so every existing SCALE_PRESETS_FT/_M/DEFAULT_SCALE_INDEX read
-// site elsewhere in this file keeps working completely unchanged regardless
-// of map type.
-let mapType = 'street';
-let SCALE_PRESETS_FT = STREET_SCALE_PRESETS_FT;
-let SCALE_PRESETS_M = STREET_SCALE_PRESETS_M;
-let DEFAULT_SCALE_INDEX = STREET_DEFAULT_SCALE_INDEX;
-
+const SCALE_PRESETS_M = [10, 25, 35, 50, 60, 120, 180, 250, 600];
+const DEFAULT_SCALE_INDEX = 3; // 400 ft / 50 m
 const DOT_PAD_DISPLAY_WIDTH_INCHES = 6 + 3 / 16;
 
 // § Pan Behavior / § Settings — Pan Amount, in units of display width/
@@ -385,12 +357,6 @@ const newMapInstructions = document.getElementById('new-map-instructions');
 const newMapForm = document.getElementById('new-map-form');
 const newMapLocationInput = document.getElementById('new-map-location');
 const btnNewMapCancel = document.getElementById('btn-new-map-cancel');
-const btnNewRegionMapStandalone = document.getElementById('btn-new-region-map-standalone');
-const newRegionMapDialog = document.getElementById('new-region-map-dialog');
-const newRegionMapInstructions = document.getElementById('new-region-map-instructions');
-const newRegionMapForm = document.getElementById('new-region-map-form');
-const newRegionMapLocationInput = document.getElementById('new-region-map-location');
-const btnNewRegionMapCancel = document.getElementById('btn-new-region-map-cancel');
 const anchorHeading = document.getElementById('anchor-heading');
 const mapSvg = document.getElementById('map');
 const messageDisplay = document.getElementById('message-display');
@@ -768,7 +734,6 @@ function positionPanEdgeBars() {
 // this app's live-data approach elsewhere.
 function captureCurrentMap() {
   return {
-    mapType,
     anchorName: lastAnchorName,
     anchorLat: lastAnchorLat,
     anchorLon: lastAnchorLon,
@@ -810,9 +775,6 @@ function loadPersistedCurrentMap() {
     const stored = JSON.parse(raw);
     if (!stored || typeof stored !== 'object') return null;
     if (typeof stored.anchorName !== 'string' || typeof stored.anchorLat !== 'number' || typeof stored.anchorLon !== 'number') return null;
-    // mapType is new; a record saved before Regional Maps existed has no
-    // such field at all -- defaults to 'street' rather than being rejected.
-    if (stored.mapType !== 'region') stored.mapType = 'street';
     return stored;
   } catch (err) {
     return null;
@@ -1131,25 +1093,14 @@ function playEdgeTone() {
   playTone(220, 150);
 }
 
-// § Scale behavior / § Map types — (re)populates the combo box from
-// whichever ladder (SCALE_PRESETS_FT) is currently active. Unlike
-// refreshScaleOptions (which only relabels existing options after a Units
-// change -- same count, same index meaning), this rebuilds the option list
-// itself, since Street's and Regional's ladders don't have the same number
-// of steps. Called once at load (street, the default) and again by
-// applyScaleLadderForMapType whenever a new map's type differs from
-// whatever was active before.
-function rebuildScaleOptions() {
-  scaleSelect.innerHTML = '';
-  SCALE_PRESETS_FT.forEach((_, index) => {
-    const option = document.createElement('option');
-    option.value = String(index);
-    option.textContent = formatScaleLabel(index);
-    scaleSelect.appendChild(option);
-  });
-  scaleSelect.value = String(DEFAULT_SCALE_INDEX);
-}
-rebuildScaleOptions();
+// § Scale behavior — populate the combo box once from SCALE_PRESETS_FT.
+SCALE_PRESETS_FT.forEach((_, index) => {
+  const option = document.createElement('option');
+  option.value = String(index);
+  option.textContent = formatScaleLabel(index);
+  scaleSelect.appendChild(option);
+});
+scaleSelect.value = String(DEFAULT_SCALE_INDEX);
 
 // § Scale behavior — shared by the on-screen combo box and the changeScale
 // hotkey helper below, so a mouse-driven scale change goes through the exact
@@ -1391,7 +1342,6 @@ document.addEventListener('click', (event) => {
 });
 
 btnNewMapStandalone.addEventListener('click', openNewMapDialog);
-btnNewRegionMapStandalone.addEventListener('click', openNewRegionMapDialog);
 
 menuNewMap.addEventListener('click', () => {
   closeNewMenu({ focusButton: true });
@@ -1885,29 +1835,6 @@ newMapForm.addEventListener('submit', (event) => {
 
 btnNewMapCancel.addEventListener('click', () => newMapDialog.close());
 
-// § Regional Maps — New Region Map dialog, modeled exactly on New Map's own
-// (openNewMapDialog above) per explicit direction. v1/roads-only: unlike
-// New Map, there's no "additional POI" concept for Regional Maps yet, so
-// this always replaces the current map outright rather than branching on
-// forceNewAnchor.
-function openNewRegionMapDialog() {
-  newRegionMapLocationInput.value = '';
-  newRegionMapInstructions.textContent = hasAnchor
-    ? 'Search for a city. The new Regional Map will be centered there. The current map will be added to your history.'
-    : 'Search for a city. The new Regional Map will be centered there.';
-  newRegionMapDialog.showModal();
-}
-
-newRegionMapForm.addEventListener('submit', (event) => {
-  event.preventDefault();
-  const query = newRegionMapLocationInput.value.trim();
-  if (!query) return;
-  newRegionMapDialog.close();
-  runRegionSearch(query);
-});
-
-btnNewRegionMapCancel.addEventListener('click', () => newRegionMapDialog.close());
-
 // § POIs — fetches and displays a brand-new anchor, discarding whatever map
 // (and additional POIs) may already be showing. Used both for the very
 // first search and for "Show new location" when a later search is too far
@@ -1930,66 +1857,7 @@ async function createNewAnchor(displayName, shortName, lat, lon, query, country)
   archiveOutgoingMapIfNeeded();
   lastSearchQuery = query;
   additionalPois = [];
-  // § Regional Maps — must run before showAnchor (which resets scaleIndex
-  // to DEFAULT_SCALE_INDEX): without this, starting a new Street Map search
-  // right after viewing a Regional Map would leave the Scale ladder stuck
-  // on Regional's.
-  applyScaleLadderForMapType('street');
   showAnchor(displayName, shortName, lat, lon, bbox, ways);
-  renderPoiList();
-  saveCurrentMapLocally();
-}
-
-// § Regional Maps — v1/roads-only search entry point, deliberately simpler
-// than runSearch/proceedWithPlace above: no "additional POI"/"too far"
-// branching (Regional Maps don't have that concept yet, always replaces
-// the current map outright) and no "Did you mean...?" fallback dialog on a
-// failed geocode (just reports "No results") -- both explicit v1 cuts, not
-// oversights, per the roads-only scope for this pass.
-async function runRegionSearch(query) {
-  setMessage('Searching…');
-  let place;
-  try {
-    place = await geocode(query);
-  } catch (err) {
-    setMessage(humanizeOsmError(err, 'address'));
-    return;
-  }
-  if (!place) {
-    setMessage('No results');
-    return;
-  }
-  // § Analytics — same country plumbing as proceedWithPlace above, carried
-  // through to fetchRegionRoads() for overpassLogs' country field.
-  const country = (place.address && place.address.country) || null;
-  await createNewRegionAnchor(place, query, country);
-}
-
-// § Regional Maps — mirrors createNewAnchor above: regionBoundingBox
-// instead of squareBoundingBox, fetchRegionRoads instead of fetchWays,
-// formatCityState instead of formatPlaceName/formatShortAddress (both
-// displayName and shortName use the same "city, state" string -- Regional
-// Maps have no separate short/long anchor label distinction the way a
-// street address's house-number-only short form does), and
-// applyScaleLadderForMapType('region') so the Scale setting switches to
-// Regional's own ladder before showAnchor resets scaleIndex to its default.
-async function createNewRegionAnchor(place, query, country) {
-  const lat = parseFloat(place.lat);
-  const lon = parseFloat(place.lon);
-  const name = formatCityState(place);
-  const bbox = regionBoundingBox(lat, lon);
-  let ways;
-  try {
-    ways = await fetchRegionRoads(bbox, country);
-  } catch (err) {
-    setMessage(humanizeOsmError(err, 'street-data'));
-    return;
-  }
-  archiveOutgoingMapIfNeeded();
-  lastSearchQuery = query;
-  additionalPois = [];
-  applyScaleLadderForMapType('region');
-  showAnchor(name, name, lat, lon, bbox, ways);
   renderPoiList();
   saveCurrentMapLocally();
 }
@@ -2013,13 +1881,7 @@ async function createNewRegionAnchor(place, query, country) {
 // argument, so they always fetch live, regardless of what's sitting in
 // the current-map ways cache.
 async function loadMapRecord(record, cachedWays) {
-  // § Regional Maps — record.mapType picks the fetch path (a region record
-  // has no cachedWays path yet -- only the Street Map current-map ways
-  // cache calls this with one, see the comment above this function).
-  const isRegion = record.mapType === 'region';
-  const bbox = isRegion
-    ? regionBoundingBox(record.anchorLat, record.anchorLon)
-    : squareBoundingBox(record.anchorLat, record.anchorLon, mapHalfSideMiles());
+  const bbox = squareBoundingBox(record.anchorLat, record.anchorLon, mapHalfSideMiles());
   let ways;
   if (cachedWays) {
     ways = cachedWays;
@@ -2027,7 +1889,7 @@ async function loadMapRecord(record, cachedWays) {
     try {
       // No fresh geocode result here (this is a saved-map reload, not a new
       // search) -- overpassLogs' country field is left null for this call.
-      ways = isRegion ? await fetchRegionRoads(bbox, null) : await fetchWays(bbox, record.searchQuery, null);
+      ways = await fetchWays(bbox, record.searchQuery, null);
     } catch (err) {
       setMessage(humanizeOsmError(err, 'street-data'));
       return;
@@ -2035,10 +1897,6 @@ async function loadMapRecord(record, cachedWays) {
   }
   archiveOutgoingMapIfNeeded();
   lastSearchQuery = record.searchQuery || null;
-  // Must happen before showAnchor, which resets scaleIndex to
-  // DEFAULT_SCALE_INDEX -- that needs to already be the right ladder's
-  // default, not whatever ladder was active for the map being replaced.
-  applyScaleLadderForMapType(isRegion ? 'region' : 'street');
   showAnchor(record.anchorName, record.anchorName, record.anchorLat, record.anchorLon, bbox, ways);
   additionalPois = (record.additionalPois || []).map((poi) => ({ ...poi }));
   hiddenPoiNames = new Set(record.hiddenPoiNames || []);
@@ -3401,21 +3259,6 @@ function formatShortAddress(place) {
   return streetLine || formatPlaceName(place);
 }
 
-// § Regional Maps — the anchor label for a Regional Map, per explicit
-// direction: use whatever coordinates Google's geocoder returns directly
-// (no separate Postpass city-point lookup -- at this map type's scale, the
-// difference is trivial), but display only the city and state, dropping
-// any street/postcode detail formatPlaceName would otherwise include.
-// Falls back to formatPlaceName for the rare place with neither (e.g. a
-// natural feature or region name with no city/state in its address
-// components).
-function formatCityState(place) {
-  const address = place.address || {};
-  const city = address.city || address.town || address.village;
-  const parts = [city, address.state].filter(Boolean);
-  return parts.length ? parts.join(', ') : formatPlaceName(place);
-}
-
 // § Data sources — square region centered on the anchor POI, half-side = POI
 // distance threshold setting.
 function squareBoundingBox(lat, lon, halfSideMiles) {
@@ -3423,31 +3266,6 @@ function squareBoundingBox(lat, lon, halfSideMiles) {
   const metersPerDegreeLat = 111320;
   const latDelta = halfSideMeters / metersPerDegreeLat;
   const lonDelta = halfSideMeters / (metersPerDegreeLat * Math.cos((lat * Math.PI) / 180));
-  return {
-    south: lat - latDelta,
-    north: lat + latDelta,
-    west: lon - lonDelta,
-    east: lon + lonDelta
-  };
-}
-
-// § Regional Maps — rectangular (not square) fetch box, 300 x 200 mi total
-// per Map Types.md, fixed regardless of scale (unlike Street Maps' Map Size
-// setting, which Regional Maps ignore entirely -- see mapHalfSideMiles).
-// Shrunk from the original 600 x 400 (2026-08-09) together with lowering
-// the scale ladder's top step from 100 to 50 mi/inch (REGION_SCALE_MI
-// above) -- both numbers come from the same "must fit the Dot Pad display
-// at the type's largest scale" derivation, so halving the scale halves
-// the box; done together specifically to cut down the element count/
-// response-time variance seen in production Postpass queries.
-const REGION_HALF_WIDTH_MILES = 150;
-const REGION_HALF_HEIGHT_MILES = 100;
-function regionBoundingBox(lat, lon) {
-  const halfWidthMeters = REGION_HALF_WIDTH_MILES * MILES_TO_METERS;
-  const halfHeightMeters = REGION_HALF_HEIGHT_MILES * MILES_TO_METERS;
-  const metersPerDegreeLat = 111320;
-  const latDelta = halfHeightMeters / metersPerDegreeLat;
-  const lonDelta = halfWidthMeters / (metersPerDegreeLat * Math.cos((lat * Math.PI) / 180));
   return {
     south: lat - latDelta,
     north: lat + latDelta,
@@ -3522,40 +3340,11 @@ function getViewportBbox() {
 // § Scale behavior / § Settings — Traditional Scale ("X = Y") is the only
 // scale format this app offers (see tmap spec.md's retired Display Area
 // appendix) -- this is just the label; the real-world viewport math itself
-// lives in viewportSizeFeet(). Regional Maps print their own mi/km display
-// values (REGION_SCALE_MI/KM) rather than SCALE_PRESETS_FT/_M's derived
-// feet/meters -- "1 in = 5280 ft" would be technically correct but useless
-// to read; the underlying math never sees the difference, only this label
-// does.
+// lives in viewportSizeFeet().
 function formatScaleLabel(index) {
-  if (mapType === 'region') {
-    return unitSystem === 'metric'
-      ? `1 cm = ${REGION_SCALE_KM[index]} km`
-      : `1 in = ${REGION_SCALE_MI[index]} mi`;
-  }
   return unitSystem === 'metric'
     ? `1 cm = ${SCALE_PRESETS_M[index]} m`
     : `1 in = ${SCALE_PRESETS_FT[index]} ft`;
-}
-
-// § Map types — swaps which scale ladder is active. Called wherever a new
-// map's anchor is created/restored (createNewAnchor, createNewRegionAnchor,
-// loadMapRecord), mirroring how scaleIndex itself already gets reset to
-// DEFAULT_SCALE_INDEX at the same call sites. Rebuilds the Scale combo
-// box's options (see rebuildScaleOptions) since Street's and Regional's
-// ladders have different step counts, not just different labels.
-function applyScaleLadderForMapType(type) {
-  mapType = type;
-  if (type === 'region') {
-    SCALE_PRESETS_FT = REGION_SCALE_PRESETS_FT;
-    SCALE_PRESETS_M = REGION_SCALE_PRESETS_M;
-    DEFAULT_SCALE_INDEX = REGION_DEFAULT_SCALE_INDEX;
-  } else {
-    SCALE_PRESETS_FT = STREET_SCALE_PRESETS_FT;
-    SCALE_PRESETS_M = STREET_SCALE_PRESETS_M;
-    DEFAULT_SCALE_INDEX = STREET_DEFAULT_SCALE_INDEX;
-  }
-  rebuildScaleOptions();
 }
 
 // § Settings — re-labels every existing Scale combo box option after a
@@ -3614,14 +3403,12 @@ function formatDistance(distFt) {
 // dataSource/attempt/requestId (spec §4.6) default to plain Overpass
 // values so fetchWays()'s existing single-attempt Overpass call sites
 // don't need editing to get a consistent schema -- only
-// fetchFromPostpassWithRetry below passes them explicitly. mapType
-// defaults to 'street' for the same reason (every call site that isn't
-// Regional Maps is a street-map fetch). payloadSizeBytes is null unless
-// the caller could actually measure the response body -- true for every
-// live call site below, but left nullable so a future call site that
-// can't measure it (or an error path with no body) doesn't need a fake
-// value.
-function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpass', attempt = 1, requestId = null, mapType = 'street', payloadSizeBytes = null }) {
+// fetchFromPostpassWithRetry below passes them explicitly. payloadSizeBytes
+// is null unless the caller could actually measure the response body --
+// true for every live call site below, but left nullable so a future call
+// site that can't measure it (or an error path with no body) doesn't need
+// a fake value.
+function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpass', attempt = 1, requestId = null, payloadSizeBytes = null }) {
   addDoc(collection(db, 'overpassLogs'), {
     uid: auth.currentUser ? auth.currentUser.uid : null,
     timestamp: serverTimestamp(),
@@ -3632,7 +3419,6 @@ function logOverpassQuery({ elapsedMs, errorType, country, dataSource = 'overpas
     dataSource,
     attempt,
     requestId,
-    mapType,
     payloadSizeBytes
   }).catch((err) => console.error('overpass log write failed:', err));
 }
@@ -3806,208 +3592,6 @@ async function fetchFromPostpassWithRetry(bbox, requestId, country) {
   throw lastError;
 }
 
-// § Regional Maps — roads-only v1 fetch. Originally two queries (motorway/
-// trunk merged by ref, plus a separate primary-roads query); the primary
-// query was dropped after 2026-08 hardware testing showed real complexity
-// at large scales in dense regions even with only major highways on
-// screen -- see project memory. Single remaining query, proven out in
-// admin/benchmark/regional-map-postpass.mjs against the real 600x400 mi
-// box before being ported here: motorway/trunk, merged by ref (ST_Union +
-// ST_LineMerge) before any length decision, then simplified -- 170
-// features / 225 KB in testing vs. 22,249 unfiltered. Segments with no
-// ref tag (~1,006 in testing) are dropped entirely for this v1, not given
-// their own handling yet.
-//
-// Single-attempt fetch (no retry/backoff) -- deliberately simpler than
-// fetchFromPostpassWithRetry above; this is a quick-and-dirty first look,
-// not hardened yet.
-const REGION_SIMPLIFY_TOLERANCE_DEGREES = 0.0015; // ~166 m, one dot's real-world width @ 1 mi/in -- see Map Types.md
-
-function regionEnvelopeSql(bbox) {
-  return `ST_MakeEnvelope(${bbox.west},${bbox.south},${bbox.east},${bbox.north},4326)`;
-}
-
-// Clips once, after union+merge, instead of once per raw input row before
-// union -- mathematically identical result (intersection distributes over
-// union: (A∪B)∩E = (A∩E)∪(B∩E)), tested 2026-08-09 as a ~4-9% speedup
-// with zero data loss against live Postpass (Dallas TX test boxes, see
-// project memory) versus clipping every fragment before the union.
-// § Bridge naming — also grouped by bridge:name (in addition to ref) so a
-// named bridge crossing merges separately from the rest of its route,
-// instead of being absorbed into one continuous ref-substituted line.
-// GROUP BY treats NULL as its own single group, so every non-bridge (and
-// every unnamed-bridge) segment of a ref still merges together exactly as
-// before -- this only splits out segments that resolve to a real bridge
-// name. A ref crossing two distinct named bridges gets two separate
-// bridge features automatically, one per bridge_name value. See
-// adaptRegionMergedHighwayResponse for how bridge_name overrides naming.
-//
-// § Bridge naming, widened 2026-08-10 -- most real landmark bridges
-// (Dumbarton, San Mateo-Hayward, Richmond-San Rafael, Carquinez,
-// Benicia-Martinez, all confirmed via live Bay Area testing) have no
-// dedicated bridge:name tag at all; only a couple of especially famous
-// ones (Golden Gate, the Bay Bridge) do. The common pattern is just
-// bridge=yes plus the bridge's proper name sitting in the ordinary name
-// tag. Falling back to name whenever bridge=yes is tempting but wrong --
-// tested live and it also caught ~40 ordinary freeway segments that are
-// merely routine grade-separated overpasses tagged bridge=yes for the
-// same physical-structure reason, fragmenting routes like I-80 into 5+
-// redundant same-named pieces instead of one merged line. The reliable
-// signal, confirmed against real data with zero false positives: only
-// fall back to name when it contains the word "bridge" -- every genuine
-// landmark bridge's name does, and no ordinary freeway/road name did in
-// testing. `\y` is Postgres's regex word-boundary (not `\b`).
-//
-// That signal alone still over-triggers at Regional's 300x200mi scope,
-// though: it also caught ~25 minor named creek/slough crossings and
-// interchange undercrossings scattered across a whole region (e.g.
-// "Willow Slough Bridge", "Howsley Undercrossing") -- individually
-// correctly named per OSM, but not landmarks anyone would want called
-// out on a large-area map, and they'd otherwise fragment their route
-// into many tiny same-ref pieces. Confirmed live: every genuine landmark
-// bridge's OWN combined length is 400m+ (down to Devil's Slide Bridge at
-// ~600m combined), while every minor crossing's is under 300m -- a clean
-// gap. But a per-row length_m filter doesn't work here: real major
-// bridges include short (26-28m) approach fragments right at their own
-// ends (confirmed for the Bay Bridge, Golden Gate, Richmond-San Rafael),
-// so filtering individual rows would fracture a real bridge's own edges.
-// Needs the length decision made on the GROUP's total, not any one row --
-// hence the two-pass CTE below: `candidates` tags every row with its
-// candidate bridge name (or NULL), `bridge_totals` sums length_m per
-// (ref, candidate name), and the final SELECT only keeps a candidate name
-// if its group's total clears MIN_BRIDGE_LENGTH_M -- otherwise it's
-// folded back into the same NULL/ordinary-route group every non-bridge
-// segment already uses, so its geometry is never lost, just not
-// specially named. Verified live: 122 features (down from an unfiltered
-// 147), 14 correctly-named landmark bridges, 108 distinct refs preserved
-// (no route geometry dropped).
-const BRIDGE_CANDIDATE_NAME_SQL_EXPR =
-  `CASE WHEN tags->>'bridge' = 'yes' AND tags ? 'bridge:name' THEN tags->>'bridge:name' ` +
-  `WHEN tags->>'bridge' = 'yes' AND tags->>'name' ~* '\\ybridge\\y' THEN tags->>'name' ` +
-  `ELSE NULL END`;
-const MIN_BRIDGE_LENGTH_M = 400;
-function buildRegionMergedHighwayQuery(bbox) {
-  const envelope = regionEnvelopeSql(bbox);
-  const finalBridgeNameExpr = `CASE WHEN bt.total_len >= ${MIN_BRIDGE_LENGTH_M} THEN c.candidate_bridge_name ELSE NULL END`;
-  return `WITH candidates AS ( ` +
-    `SELECT geom, length_m, tags->>'ref' AS ref, tags->>'name' AS name, ${BRIDGE_CANDIDATE_NAME_SQL_EXPR} AS candidate_bridge_name ` +
-    `FROM postpass_line WHERE geom && ${envelope} AND tags->>'highway' IN ('motorway','trunk') AND tags ? 'ref' ` +
-    `), bridge_totals AS ( ` +
-    `SELECT ref, candidate_bridge_name, SUM(length_m) AS total_len FROM candidates ` +
-    `WHERE candidate_bridge_name IS NOT NULL GROUP BY ref, candidate_bridge_name ` +
-    `) ` +
-    `SELECT c.ref, ${finalBridgeNameExpr} AS bridge_name, (array_agg(c.name))[1] AS name, ` +
-    `ST_SimplifyPreserveTopology(ST_Intersection(ST_LineMerge(ST_Union(c.geom)), ${envelope}), ${REGION_SIMPLIFY_TOLERANCE_DEGREES}) AS geom ` +
-    `FROM candidates c LEFT JOIN bridge_totals bt ON bt.ref = c.ref AND bt.candidate_bridge_name = c.candidate_bridge_name ` +
-    `GROUP BY c.ref, ${finalBridgeNameExpr}`;
-}
-
-// A single GeoJSON LineString/MultiLineString ring converted to this app's
-// {lat,lon} point-array geometry shape. Unlike flattenMultiLineString
-// above (which warns and drops extra parts -- safe there, since a single
-// OSM way's own geometry is never genuinely multi-part per the sampling
-// noted at its definition), a merged-by-ref route commonly *is* genuinely
-// multi-part (a real gap in the route, or it crossing the fetch box edge
-// more than once -- 136 of 170 in testing) -- dropping those parts would
-// silently delete real chunks of the route, so every part becomes its own
-// separate line here instead.
-function coordinatesToPoints(coords) {
-  return coords.map(([lon, lat]) => ({ lat, lon }));
-}
-function geometryToPointArrays(geometry) {
-  if (geometry.type === 'LineString') return [coordinatesToPoints(geometry.coordinates)];
-  if (geometry.type === 'MultiLineString') return geometry.coordinates.map(coordinatesToPoints);
-  return [];
-}
-
-// Merged-by-ref rows have no osm_id (one row can represent dozens of
-// original OSM ways) and no real highway=motorway/trunk distinction after
-// grouping -- 'motorway' is used uniformly as a tier-1 stand-in so
-// processWays' ref-substitution (issue #19) still applies correctly; the
-// two tiers are treated identically by that logic anyway (see
-// HIGHWAY_TIERS). A synthetic negative id keeps these visibly distinct
-// from any real OSM id if ever inspected.
-//
-// § Bridge naming — a bridge_name row (see buildRegionMergedHighwayQuery)
-// gets tags.name set directly to the bridge's name and deliberately no
-// ref tag at all, so processWays' ref-substitution branch (which only
-// fires when a ref is present) never touches it -- the bridge name is
-// final, not a stand-in a later step might override or annotate with an
-// honorific. Every other row (bridge_name null -- the common case) keeps
-// the normal ref tag and goes through ref-substitution exactly as before.
-function adaptRegionMergedHighwayResponse(geoJson) {
-  const ways = [];
-  let syntheticId = -1;
-  for (const f of geoJson.features) {
-    const parts = geometryToPointArrays(f.geometry);
-    const bridgeName = f.properties.bridge_name;
-    for (const geometry of parts) {
-      if (geometry.length < 2) continue;
-      ways.push({
-        type: 'way',
-        id: syntheticId--,
-        tags: bridgeName
-          ? { highway: 'motorway', name: bridgeName }
-          : { highway: 'motorway', ref: f.properties.ref, name: f.properties.name || '' },
-        geometry
-      });
-    }
-  }
-  return ways;
-}
-
-// Single-attempt fetch with its own analytics logging (mirrors
-// fetchWays'/fetchPostpassOnce's win-or-lose logging, just without the
-// retry loop -- see the "quick-and-dirty first look" comment above).
-// mapType is always 'region' here since this is only ever called for
-// Regional Maps.
-async function fetchRegionSql(query, country, requestId) {
-  const fetchStart = Date.now();
-  let res;
-  try {
-    res = await fetch(POSTPASS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'data=' + encodeURIComponent(query),
-      signal: AbortSignal.timeout(POSTPASS_TOTAL_TIMEOUT_MS)
-    });
-  } catch (err) {
-    const kind = err.name === 'TimeoutError' ? 'timeout' : 'network';
-    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: kind, country, dataSource: 'postpass', requestId, mapType: 'region' });
-    throw new OsmFetchError(kind);
-  }
-  if (!res.ok) {
-    const kind = classifyHttpFailure(res.status);
-    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: kind, country, dataSource: 'postpass', requestId, mapType: 'region' });
-    throw new OsmFetchError(kind, res.status);
-  }
-  const text = await res.text();
-  const payloadSizeBytes = new TextEncoder().encode(text).length;
-  const data = JSON.parse(text);
-  if (checkPostpassSoftFailure(data)) {
-    logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: 'server-error', country, dataSource: 'postpass', requestId, mapType: 'region', payloadSizeBytes });
-    throw new OsmFetchError('server-error', res.status);
-  }
-  logOverpassQuery({ elapsedMs: Date.now() - fetchStart, errorType: null, country, dataSource: 'postpass', requestId, mapType: 'region', payloadSizeBytes });
-  return data;
-}
-
-// Returns raw, unprocessed ways -- deliberately NOT calling processWays()
-// here. showAnchor() below already calls processWays(lastRawWays) itself
-// for every map type; calling it a second time here would run its
-// ref-substitution step twice and corrupt honorificName (second pass would
-// save the already-substituted ref as "the original name" before
-// resubstituting). Same reason fetchWays() doesn't call it either.
-//
-// country mirrors fetchWays'/createNewAnchor's own country plumbing (see
-// logOverpassQuery's country field) -- null on a loadMapRecord reload,
-// same as fetchWays' own null-country call site, since there's no fresh
-// geocode result to pull it from there either.
-async function fetchRegionRoads(bbox, country) {
-  const requestId = crypto.randomUUID();
-  return adaptRegionMergedHighwayResponse(await fetchRegionSql(buildRegionMergedHighwayQuery(bbox), country, requestId));
-}
-
 // § Major highway ref substitution (issue #19) — most people know a major
 // highway by its numeric route designation (e.g. "I 80"), not its
 // honorary/colloquial OSM name (e.g. "Eastshore Freeway"), so a tier-1 way
@@ -4064,25 +3648,26 @@ function processWays(rawWays) {
     // § Bridge naming — a named bridge crossing (bridge=yes + bridge:name,
     // e.g. the SF-Oakland Bay Bridge) gets that name outright, dominating
     // over ref-substitution/honorific naming entirely -- no "I80", no
-    // "Dwight D. Eisenhower Highway", just the bridge's own name. Only
-    // Street Maps' raw fetch ever carries these tags on an individual way
-    // (Regional's merged-highway query already resolves this at the SQL
-    // level -- see adaptRegionMergedHighwayResponse/BRIDGE_NAME_SQL_EXPR --
-    // so its synthetic ways never reach this branch at all). Derived fresh
-    // from immutable tags every call, so unlike honorificName below this
-    // needs no re-run guard -- a second processWays() pass just re-derives
-    // the identical name.
+    // "Dwight D. Eisenhower Highway", just the bridge's own name. Derived
+    // fresh from immutable tags every call, so unlike honorificName below
+    // this needs no re-run guard -- a second processWays() pass just
+    // re-derives the identical name.
     //
-    // Widened 2026-08-10 to also match BRIDGE_NAME_SQL_EXPR's fallback:
-    // most real landmark bridges (Dumbarton, Richmond-San Rafael, etc.)
-    // have no dedicated bridge:name tag at all, just bridge=yes plus their
-    // proper name in the ordinary name tag -- see that constant's own
-    // comment for why a blanket "bridge=yes -> use name" fallback is
-    // wrong (over-triggers on routine overpasses) and why requiring the
-    // word "bridge" in the name is the reliable signal instead. An
-    // unnamed bridge, or a bridge=yes overpass whose name doesn't contain
-    // "bridge", falls through to normal naming -- nothing distinct to
-    // call it.
+    // Most real landmark bridges (Dumbarton, San Mateo-Hayward, Richmond-
+    // San Rafael, Carquinez, Benicia-Martinez, all confirmed via live Bay
+    // Area testing) have no dedicated bridge:name tag at all; only a
+    // couple of especially famous ones (Golden Gate, the Bay Bridge) do.
+    // The common pattern is just bridge=yes plus the bridge's proper name
+    // sitting in the ordinary name tag. Falling back to name whenever
+    // bridge=yes is tempting but wrong -- tested live and it also caught
+    // ~40 ordinary freeway segments that are merely routine grade-
+    // separated overpasses tagged bridge=yes for the same physical-
+    // structure reason, fragmenting routes like I-80 into 5+ redundant
+    // same-named pieces instead of one merged line. The reliable signal,
+    // confirmed against real data with zero false positives: only fall
+    // back to name when it contains the word "bridge" -- every genuine
+    // landmark bridge's name does, and no ordinary freeway/road name did
+    // in testing.
     const rawName = way.tags && way.tags.name;
     const bridgeName =
       way.tags && way.tags.bridge === 'yes' &&
@@ -5340,9 +4925,8 @@ function distanceToSegment(px, py, x0, y0, x1, y1) {
 // no handling for parenthetical punctuation, and also drives on-map
 // braille labels via assignBrailleLabels) -- honorificName is compacted
 // on its own, in isolation, before the parens go on, and tags.name itself
-// stays untouched. Skips silently if there's no honorific (common --
-// Regional's merged-highway query doesn't always recover a name) or if
-// it's identical to the name already shown (avoids "I80 (I80)").
+// stays untouched. Skips silently if there's no honorific or if it's
+// identical to the name already shown (avoids "I80 (I80)").
 function appendHonorific(displayName, honorificName) {
   return honorificName && honorificName !== displayName
     ? `${displayName} (${compactedDisplayName(honorificName)})`
@@ -6371,16 +5955,6 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'n') {
     event.preventDefault();
     openNewMapDialog();
-    return;
-  }
-
-  // § Regional Maps — r opens New Region Map, same "always available, even
-  // before any map exists" reasoning as n above. Currently the only way to
-  // reach it -- the standalone button it's paired with is deliberately
-  // hidden (see index.html) until Regional Maps are ready for real use.
-  if (event.key === 'r') {
-    event.preventDefault();
-    openNewRegionMapDialog();
     return;
   }
 

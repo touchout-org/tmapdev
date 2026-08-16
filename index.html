@@ -37,7 +37,6 @@
 
   <div id="new-row">
     <button type="button" id="btn-new-map-standalone" title="Search: Open a map centered on a new location.">New Map</button>
-    <button type="button" id="btn-new-region-map-standalone" hidden title="Search: Open a Regional Map centered on a city.">New Region Map…</button>
     <div id="new-menu-container" hidden>
       <button type="button" id="new-menu-button" aria-haspopup="true" aria-expanded="false" aria-controls="new-menu" title="Create a new map, add a pin, or edit the current pin.">Map Menu</button>
       <ul id="new-menu" role="menu" aria-labelledby="new-menu-button" hidden>
@@ -74,17 +73,6 @@
       <input type="text" id="new-map-location" name="location" autocomplete="off" required>
       <button type="submit" id="btn-new-map-search">Search</button>
       <button type="button" id="btn-new-map-cancel">Cancel</button>
-    </form>
-  </dialog>
-
-  <dialog id="new-region-map-dialog" aria-labelledby="new-region-map-heading">
-    <h3 id="new-region-map-heading">New Region Map</h3>
-    <p id="new-region-map-instructions"></p>
-    <form id="new-region-map-form">
-      <label for="new-region-map-location">New Regional Map location:</label>
-      <input type="text" id="new-region-map-location" name="location" autocomplete="off" required>
-      <button type="submit" id="btn-new-region-map-search">Search</button>
-      <button type="button" id="btn-new-region-map-cancel">Cancel</button>
     </form>
   </dialog>
 
