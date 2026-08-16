@@ -73,13 +73,18 @@ const btnTestHaptic = document.getElementById('btn-test-haptic');
 // of truth for anything announced, same pattern as DotTMAP's setMessage
 // (clear-then-reflow so a screen reader treats each update as a fresh
 // assertive announcement rather than coalescing successive ones).
-function setMessage(text) {
+//
+// deviceDelayMs (default 0) is forwarded to sendTextToDevice's own delay --
+// see dotpad-toolkit/README.md's "Message-line and graphics writes contend
+// over BLE" section. The on-screen text (and screen-reader announcement)
+// still updates immediately regardless; only the device-bound write waits.
+function setMessage(text, deviceDelayMs = 0) {
   messageEl.textContent = '';
   void messageEl.offsetHeight;
   messageEl.textContent = text;
   if (currentDevice) {
     const numCells = currentDevice.numberBrailleCellColumns;
-    sendTextToDevice(sdk, DisplayMode, currentDevice, truncateMessage(text, numCells));
+    sendTextToDevice(sdk, DisplayMode, currentDevice, truncateMessage(text, numCells), deviceDelayMs);
   }
 }
 
@@ -133,6 +138,12 @@ function buildPixels() {
 // experiment: it's the same fixed interval tmap ships with, tuned against
 // real hardware in the previous round of work here.
 const CURSOR_SEND_INTERVAL_MS = 80;
+
+// How long to defer the "Connected" message-line write after connecting, so
+// it doesn't contend with (and hold up) the initial grid's graphics write --
+// see dotpad-toolkit/README.md's "Message-line and graphics writes contend
+// over BLE" section. Same value tmap settled on.
+const CONNECT_MESSAGE_DELAY_MS = 1000;
 
 function createCoalescer(intervalMs, flush) {
   let lastSentAt = -Infinity;
@@ -375,8 +386,13 @@ watchDotPad(sdk, DataCodes, {
     btnConnect.hidden = true;
     btnConnect.disabled = false;
     btnDisconnect.hidden = false;
-    setMessage('Connected');
+    // The grid must render immediately on connect -- see
+    // dotpad-toolkit/README.md's "Message-line and graphics writes contend
+    // over BLE" section. Send the graphic write first/undelayed, and defer
+    // the "Connected" message-line write (CONNECT_MESSAGE_DELAY_MS, same
+    // 1000ms tmap settled on) so it doesn't hold the grid write up.
     doSend();
+    setMessage('Connected', CONNECT_MESSAGE_DELAY_MS);
   },
   onDisconnected: () => {
     currentDevice = null;
