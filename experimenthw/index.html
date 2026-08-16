@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>DotPad Cursor Performance Experiment</title>
+<title>DotPad Haptics &amp; Responsiveness Experiment</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<h1>DotPad Cursor Performance Experiment</h1>
-<p>Fixed 60x40 tactile display, no pan or zoom. Move the cursor with the arrow keys or the Dot Pad's cursor dots (3/2/5/6 = left/up/down/right) and use the controls below to test different strategies for keeping the display responsive under rapid cursoring, plus an experimental cursor-acceleration technique that moves further per press once several fast presses in a row are detected, regardless of direction.</p>
+<h1>DotPad Haptics &amp; Responsiveness Experiment</h1>
+<p>Fixed 60x40 tactile display, no pan or zoom. Move the cursor with the arrow keys or the Dot Pad's cursor dots (3/2/5/6 = left/up/down/right). Write/pacing strategy is fixed to what DotTMAP itself uses in production (single full-frame write, no redundant clear pass, coalesced at a fixed interval) &mdash; that tuning work is done; this page is for the two things that aren't: haptic feedback parameters, and replacing the old software-timed cursor-acceleration hack with the SDK's real key-down/key-up events for hold-to-repeat movement.</p>
 
 <p id="browser-warning" role="alert" hidden>This App works best in Chrome. Please switch to Chrome so you can connect to the Dot Pad.</p>
 
@@ -18,45 +18,42 @@
 
 <p id="message" role="alert" aria-live="assertive"></p>
 
-<fieldset id="payload-strategy-group">
-  <legend>Payload strategy (what gets sent to the device on each cursor move)</legend>
-  <label><input type="radio" name="payload-strategy" value="clear-redraw" checked> Clear + full redraw (current DotTMAP/toolkit default — two full-frame writes per move)</label><br>
-  <label><input type="radio" name="payload-strategy" value="single-frame"> Single full-frame write (skip the redundant clear pass — one write per move)</label><br>
-  <label><input type="radio" name="payload-strategy" value="partial-rows"> Partial write — only the changed cell-rows (bypasses the SDK's top-level wrapper to address a sub-range directly; experimental, see code comments)</label>
+<fieldset id="repeat-group">
+  <legend>Cursor repeat rate (hold-to-repeat, driven by real key-down/key-up)</legend>
+  <p>Holding a direction (keyboard arrow key, or the Dot Pad's own cursor dot) moves the cursor once immediately on key-down, then pauses 200ms before repeating at the interval selected below, for as long as the key stays down. Releasing the key (key-up) stops the repeat immediately &mdash; no timeout guessing, no "how long has it been since the last press" heuristics. Repeating only ever runs while that's the <em>only</em> key or dot held: pressing a second key/dot cancels the repeat immediately, and resuming afterward always requires releasing everything and starting a fresh key-down &mdash; this is deliberate, so this repeat behavior never fights with other combos (panning, zooming, etc.) that reuse the same cursor keys/dots alongside others.</p>
+  <label for="select-repeat-interval">Repeat interval:</label>
+  <select id="select-repeat-interval">
+    <option value="50">50 ms</option>
+    <option value="100" selected>100 ms</option>
+    <option value="200">200 ms</option>
+    <option value="500">500 ms</option>
+  </select>
 </fieldset>
 
-<fieldset id="pacing-group">
-  <legend>Send pacing</legend>
-  <label><input type="checkbox" id="chk-coalesce" checked> Coalesce rapid moves (drop superseded in-flight positions, always send the latest)</label><br>
-  <label for="input-interval">Minimum time between sends (ms):</label>
-  <input type="number" id="input-interval" min="0" max="1000" step="10" value="80">
+<fieldset id="haptics-group">
+  <legend>Haptics</legend>
+  <p>The Dot Pad's vibrator is on/off only &mdash; there is no intensity/amplitude parameter in the protocol, only pulse timing. <code>requestVibrator(onMs, offMs, repeatCount)</code>: <strong>on ms</strong> and <strong>off ms</strong> are each truncated to 10ms resolution by the device firmware; <strong>repeat count</strong> is silently clamped to 1&ndash;5 by the SDK no matter what's requested. Edit the fields and press "Test vibration" to feel a configuration, or press dot 1 on the Dot Pad itself &mdash; its key-down triggers the same test with the current settings.</p>
+  <label for="input-haptic-on">On duration (ms, 10ms steps):</label>
+  <input type="number" id="input-haptic-on" min="0" step="10" value="70"><br>
+  <label for="input-haptic-off">Off duration (ms, 10ms steps):</label>
+  <input type="number" id="input-haptic-off" min="0" step="10" value="50"><br>
+  <label for="input-haptic-repeat">Repeat count (clamped to 1&ndash;5 by the SDK):</label>
+  <input type="number" id="input-haptic-repeat" min="1" max="5" step="1" value="2"><br>
+  <button type="button" id="btn-test-haptic">Test vibration</button>
 </fieldset>
 
 <div id="stats-panel">
   <h2>Live stats</h2>
   <dl>
-    <dt>Cursor position</dt><dd id="stat-position">—</dd>
+    <dt>Cursor position</dt><dd id="stat-position">&mdash;</dd>
     <dt>Keydown events received</dt><dd id="stat-keydowns">0</dd>
     <dt>Sends issued</dt><dd id="stat-sends">0</dd>
     <dt>Moves coalesced (dropped)</dt><dd id="stat-coalesced">0</dd>
-    <dt>Last payload size (hex chars)</dt><dd id="stat-payload-size">—</dd>
-    <dt>Last inter-send gap (ms)</dt><dd id="stat-gap">—</dd>
+    <dt>Last payload size (hex chars)</dt><dd id="stat-payload-size">&mdash;</dd>
+    <dt>Last inter-send gap (ms)</dt><dd id="stat-gap">&mdash;</dd>
   </dl>
   <button type="button" id="btn-reset-stats">Reset stats</button>
 </div>
-
-<fieldset id="accel-group">
-  <legend>Cursor acceleration (experimental)</legend>
-  <p>After this many fast presses in a row (any direction), the cursor starts moving by the acceleration factor per press instead of 1, and the reference grid hides so only the cursor's own movement is felt. Switching direction does not interrupt this. Only a pause past the timeout cancels acceleration and restores the grid. Edit a field and press Enter (in any of the four) to apply.</p>
-  <label for="input-accel-timing-threshold">Acceleration timing threshold (ms):</label>
-  <input type="number" id="input-accel-timing-threshold" min="1" step="10" value="200"><br>
-  <label for="input-accel-count-threshold">Acceleration count threshold (presses):</label>
-  <input type="number" id="input-accel-count-threshold" min="1" step="1" value="3"><br>
-  <label for="input-accel-factor">Acceleration factor (pixels per press):</label>
-  <input type="number" id="input-accel-factor" min="1" step="1" value="5"><br>
-  <label for="input-accel-timeout">Acceleration timeout (ms):</label>
-  <input type="number" id="input-accel-timeout" min="1" step="10" value="500">
-</fieldset>
 
 <script type="module" src="app.js"></script>
 </body>

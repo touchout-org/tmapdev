@@ -1,21 +1,32 @@
-// experimenthw — a minimal Dot Pad app for isolating why the display gets
-// "confused and sluggish" under rapid cursoring. No map, no pan/zoom: a
-// single cursor ring on a fixed 60x40 tactile grid, moved by the arrow keys
-// or the Dot Pad's own cursor dots. Everything else on the page is a set of
-// switchable strategies for how a cursor move gets turned into a BLE write,
-// plus a live stats readout, so those strategies can be A/B tested against
-// real hardware.
+// experimenthw — a minimal Dot Pad app for experimenting with SDK 3.0.1's
+// newer features: haptic feedback parameters, and real key-down/key-up
+// events for hold-to-repeat cursor movement. No map, no pan/zoom: a single
+// cursor ring on a fixed 60x40 tactile grid.
+//
+// The previous round of experiments here was about *how to write to the
+// display* under rapid cursoring without it getting confused/sluggish. That
+// work is done and solidified: this page now always writes a single
+// full-frame graphic (no redundant clear pass) coalesced at a fixed
+// interval, matching exactly what DotTMAP itself does in production for
+// cursor moves (see tmap/app.js's sendGraphicToDevice/scheduleCursorGraphicSend
+// and CURSOR_SEND_INTERVAL_MS) -- see § Send pacing below. There's no live
+// strategy toggle anymore; if that ever needs revisiting, the earlier
+// three-way comparison (clear-redraw / single-frame / partial-rows) is in
+// git history.
 //
 // Built on dotpad-toolkit (../../dotpad-toolkit/) rather than duplicating
 // DotTMAP's own copies of this logic — see that repo's README for the
-// module index and the encoding/dimension gotchas already documented there.
+// module index and the encoding/dimension gotchas already documented there,
+// including the two new "hard-won lessons" this round of work added: the
+// onKey vs onKeyDown/onKeyUp distinction (and their non-corresponding key
+// names), and the haptics protocol's actual parameter set.
 import { DotPadSDK, DotPadScanner, DisplayMode, DataCodes } from '../../dotpad-toolkit/vendor/web-sdk-3.0.1/DotPadSDK-3.0.1.js';
 import { connectDotPad, disconnectDotPad, watchDotPad } from '../../dotpad-toolkit/device/connection.js';
 import { sendTextToDevice, truncateMessage } from '../../dotpad-toolkit/device/messageDisplay.js';
-import { sendGraphicToDevice, graphicsDimensions } from '../../dotpad-toolkit/device/graphicsDisplay.js';
+import { graphicsDimensions } from '../../dotpad-toolkit/device/graphicsDisplay.js';
 import { packPixelsToHex } from '../../dotpad-toolkit/graphics/packPixelsToHex.js';
 import { drawCursorRing, drawLinePixels } from '../../dotpad-toolkit/graphics/rasterizer.js';
-import { CURSOR_DOT, labelToByte6 } from '../../dotpad-toolkit/device/keys.js';
+import { dotPadKeyToDot } from '../../dotpad-toolkit/device/keys.js';
 
 const sdk = new DotPadSDK();
 const scanner = new DotPadScanner();
@@ -40,12 +51,6 @@ let displayW = 60;
 let displayH = 40;
 let cursorX = Math.floor(displayW / 2);
 let cursorY = Math.floor(displayH / 2);
-// Position as of the last frame actually written to the device -- distinct
-// from cursorX/Y (the latest desired position) whenever sends are being
-// coalesced. The partial-rows strategy needs both: it has to know what's
-// really on the display right now, not just where the cursor logically is.
-let prevCursorX = cursorX;
-let prevCursorY = cursorY;
 
 // ---- DOM ----
 const btnConnect = document.getElementById('btn-connect');
@@ -58,16 +63,11 @@ const statCoalesced = document.getElementById('stat-coalesced');
 const statPayloadSize = document.getElementById('stat-payload-size');
 const statGap = document.getElementById('stat-gap');
 const btnResetStats = document.getElementById('btn-reset-stats');
-const inputInterval = document.getElementById('input-interval');
-const chkCoalesce = document.getElementById('chk-coalesce');
-const inputAccelTiming = document.getElementById('input-accel-timing-threshold');
-const inputAccelCount = document.getElementById('input-accel-count-threshold');
-const inputAccelFactor = document.getElementById('input-accel-factor');
-const inputAccelTimeout = document.getElementById('input-accel-timeout');
-
-function currentPayloadStrategy() {
-  return document.querySelector('input[name="payload-strategy"]:checked').value;
-}
+const selectRepeatInterval = document.getElementById('select-repeat-interval');
+const inputHapticOn = document.getElementById('input-haptic-on');
+const inputHapticOff = document.getElementById('input-haptic-off');
+const inputHapticRepeat = document.getElementById('input-haptic-repeat');
+const btnTestHaptic = document.getElementById('btn-test-haptic');
 
 // § Message display — mirrors to the Dot Pad's message line, single source
 // of truth for anything announced, same pattern as DotTMAP's setMessage
@@ -102,10 +102,7 @@ btnResetStats.addEventListener('click', () => {
 // Same reference grid DotTMAP draws on initial connect, before a real map
 // is loaded (see rasterizeTestGrid/sendTestGridToDevice in tmap/app.js) --
 // added here purely so the display has realistic static content for the
-// cursor to move over, rather than a blank field, while testing send
-// strategies. Being static, it never changes between frames -- only the
-// cursor ring's own row-span does, so it doesn't affect the partial-rows
-// strategy's change-detection below (see sendPartialRows).
+// cursor to move over, rather than a blank field.
 function drawReferenceGrid(pixels) {
   const cols = 6, rows = 4;
   for (let c = 0; c <= cols; c++) {
@@ -120,150 +117,78 @@ function drawReferenceGrid(pixels) {
 
 function buildPixels() {
   const pixels = new Uint8Array(displayW * displayH);
-  if (!accelActive) drawReferenceGrid(pixels);
+  drawReferenceGrid(pixels);
   drawCursorRing(pixels, displayW, displayH, cursorX, cursorY);
   return pixels;
 }
 
-function fullFrameHexChars() {
-  return currentDevice.numberCellColumns * currentDevice.numberCellRows * 2;
-}
-
-// Strategy: single full-frame write, skipping the redundant zero-clear pass
-// that dotpad-toolkit's own sendGraphicToDevice always does first.
-function sendSingleFrame(pixels) {
-  const numRows = currentDevice.numberCellRows;
-  const hex = packPixelsToHex(pixels, displayW, displayH, numRows);
-  sdk.displayGraphicData(hex, currentDevice, DisplayMode.GraphicMode);
-  return hex.length;
-}
-
-// Strategy: only rewrite the cell-ROWS the cursor ring actually touched
-// (its old position through its new one), not the whole 60x40 frame.
+// ---- Send pacing: solidified best practice, ported verbatim from tmap's
+// scheduleCursorGraphicSend/createCoalescer (tmap/app.js) ----
 //
-// This calls the connected DotDevice's own displayGraphicData(hex,
-// startLine, startCellIndex, mode) directly, bypassing
-// DotPadSDK.displayGraphicData()'s public wrapper -- that wrapper always
-// forwards to the device with startLine=1/startCellIndex=0, i.e. it can
-// only ever do a full-frame write (see DotPadSDK-3.0.1.js). The device's
-// own method does support a sub-range: startLine is a 1-indexed cell-row,
-// and startCellIndex/hex-length together address a flat, row-major CELL
-// range (2 hex chars per cell -- NOT the dot/nibble addressing
-// packPixelsToHex itself uses internally). This was worked out by reading
-// the vendored SDK source directly; it isn't documented anywhere and isn't
-// exercised by dotpad-toolkit's own graphicsDisplay.js, so treat it as an
-// unsupported technique that needs re-checking against any future SDK
-// version, not an assumed-stable API.
-//
-// Only restricts by row band, not column -- still sends full display-width
-// rows, just fewer of them. A simpler, safer partial update than a full 2D
-// bounding box, and already a large reduction for typical single-step
-// cursor moves.
-function sendPartialRows(pixels) {
-  const numCols = currentDevice.numberCellColumns;
-  const numRows = currentDevice.numberCellRows;
-  const hexFull = packPixelsToHex(pixels, displayW, displayH, numRows);
+// A single full-frame write per send, clear pass skipped (a full frame
+// already fully describes the desired state -- see tmap's own comment on
+// this), trailing-edge-throttled so a burst of rapid moves collapses into
+// one deferred send using whatever position is current when it actually
+// fires, rather than one send per keystroke. This is no longer a live
+// experiment: it's the same fixed interval tmap ships with, tuned against
+// real hardware in the previous round of work here.
+const CURSOR_SEND_INTERVAL_MS = 80;
 
-  const ringRowSpan = (cy) => [Math.max(0, cy - 1), Math.min(displayH - 1, cy + 2)];
-  const [oldTop, oldBottom] = ringRowSpan(prevCursorY);
-  const [newTop, newBottom] = ringRowSpan(cursorY);
-  const minRow = Math.min(oldTop, newTop);
-  const maxRow = Math.max(oldBottom, newBottom);
-  const minBand = Math.floor(minRow / 4);
-  const maxBand = Math.floor(maxRow / 4);
-
-  const charsPerBand = displayW; // packPixelsToHex: 1 hex char per nibble, displayW nibbles/band
-  const hexSlice = hexFull.substring(minBand * charsPerBand, (maxBand + 1) * charsPerBand);
-  const startCellIndex = minBand * numCols; // flat row-major cell offset, 2 hex chars/cell
-
-  currentDevice.displayGraphicData(hexSlice, 1, startCellIndex, DisplayMode.GraphicMode);
-  return hexSlice.length;
-}
-
-// ---- Send pacing: trailing-edge throttle + coalescing ----
-//
-// The vendored SDK has its own write-acknowledgment handshake --
-// DataCodes.ResponseDisplayLineAck / ResponseDisplayLineComplete, tracked
-// internally per display-line via requestReady/receiveAck flags -- but it's
-// consumed entirely inside the SDK's own dispatch (see its DataCode switch)
-// and never reaches setCallBack()'s public callback. So this app has no way
-// to directly observe "did the device actually finish the last write";
-// there's no true ack to gate on from app code. The mitigation below
-// approximates it with a configurable minimum inter-send interval instead,
-// meant to be tuned empirically against real hardware -- which is the
-// actual point of exposing it as a live control rather than a constant.
-let pendingSend = false;
-let lastSendAt = 0;
-let sendTimer = null;
-
-function scheduleSend() {
-  renderStats();
-  if (!currentDevice) return;
-
-  const coalesce = chkCoalesce.checked;
-  const intervalMs = Number(inputInterval.value) || 0;
-
-  if (!coalesce) {
-    doSend();
-    return;
-  }
-
-  const now = performance.now();
-  const elapsed = now - lastSendAt;
-  if (elapsed >= intervalMs && !sendTimer) {
-    doSend();
-    return;
-  }
-
-  // A send happened too recently (or one's already scheduled) -- collapse
-  // this move into whichever send eventually fires, rather than queuing
-  // every intermediate position.
-  if (pendingSend) stats.coalesced++;
-  pendingSend = true;
-  if (!sendTimer) {
+function createCoalescer(intervalMs, flush) {
+  let lastSentAt = -Infinity;
+  let timer = null;
+  let pending;
+  return function schedule(payload) {
+    pending = payload;
+    const now = performance.now();
+    const elapsed = now - lastSentAt;
+    if (elapsed >= intervalMs && timer === null) {
+      lastSentAt = now;
+      flush(payload);
+      return;
+    }
+    if (timer !== null) {
+      stats.coalesced++;
+      return;
+    }
     const wait = Math.max(0, intervalMs - elapsed);
-    sendTimer = setTimeout(() => {
-      sendTimer = null;
-      if (pendingSend) {
-        pendingSend = false;
-        doSend();
-      }
+    timer = setTimeout(() => {
+      timer = null;
+      lastSentAt = performance.now();
+      flush(pending);
     }, wait);
-  }
+  };
 }
 
+let lastSendAt = null;
 function doSend() {
   if (!currentDevice) return;
   const now = performance.now();
-  if (lastSendAt) stats.lastGap = now - lastSendAt;
+  if (lastSendAt !== null) stats.lastGap = now - lastSendAt;
   lastSendAt = now;
   stats.sends++;
 
   const pixels = buildPixels();
-  const strategy = currentPayloadStrategy();
-  if (strategy === 'clear-redraw') {
-    sendGraphicToDevice(sdk, DisplayMode, currentDevice, pixels);
-    stats.lastPayloadChars = 2 * fullFrameHexChars(); // zero pass + real pass
-  } else if (strategy === 'single-frame') {
-    stats.lastPayloadChars = sendSingleFrame(pixels);
-  } else {
-    stats.lastPayloadChars = sendPartialRows(pixels);
-  }
+  const numRows = currentDevice.numberCellRows;
+  const hex = packPixelsToHex(pixels, displayW, displayH, numRows);
+  sdk.displayGraphicData(hex, currentDevice, DisplayMode.GraphicMode);
+  stats.lastPayloadChars = hex.length;
 
-  prevCursorX = cursorX;
-  prevCursorY = cursorY;
   renderStats();
 }
 
-// ---- Cursor movement -- shared by keyboard and Dot Pad dots. Distance is
-// normally 1 display pixel per press; see § Cursor acceleration below for
-// how that distance can grow. ----
+const scheduleSend = createCoalescer(CURSOR_SEND_INTERVAL_MS, doSend);
+
+// ---- Cursor movement -- shared by keyboard and Dot Pad dots. Always one
+// display pixel per repeat tick; see § Cursor repeat below for how holding
+// a direction turns into a stream of these. ----
 function moveCursor(dx, dy) {
   const newX = Math.min(displayW - 1, Math.max(0, cursorX + dx));
   const newY = Math.min(displayH - 1, Math.max(0, cursorY + dy));
   if (newX === cursorX && newY === cursorY) return;
   cursorX = newX;
   cursorY = newY;
+  renderStats();
   scheduleSend();
 }
 
@@ -273,104 +198,155 @@ function isFormControlFocused() {
   return !!focused && FORM_CONTROL_TAGS.has(focused.tagName);
 }
 
-// § Cursor acceleration (experimental) — direction never resets or cancels
-// anything; only timing does. A ramp-up press slower than
-// accelConfig.timingThresholdMs since the last one starts a brand-new
-// streak from scratch (count=1, not accelerated) regardless of which
-// direction either press was. Once accelActive, movement is
-// accelConfig.factor pixels/press and the reference grid is hidden (see
-// buildPixels above); switching direction mid-acceleration keeps moving at
-// the accelerated distance in the new direction rather than interrupting
-// it -- the only thing that cancels acceleration is accelConfig.timeoutMs
-// of silence (the watchdog below), which also restores the grid.
+// § Cursor repeat — replaces the old software-timed "N fast presses in a
+// row" acceleration hack with real key-down/key-up. A direction moves once
+// immediately on key-down, waits REPEAT_INITIAL_DELAY_MS, then moves again
+// every currentRepeatIntervalMs() until that direction's key-up arrives.
+// Unlike the old model there's no ambiguity about "is this still held" --
+// key-up is authoritative and stops the repeat immediately.
+//
+// The interval used for a given hold is whatever's selected when that
+// hold's repeat phase actually starts (i.e. after the initial delay) --
+// changing the dropdown mid-hold doesn't retroactively change an
+// already-running repeat. That's a deliberate simplification, not an
+// oversight: re-polling the dropdown on every tick would be a bigger
+// behavior change than this experiment needs.
+const REPEAT_INITIAL_DELAY_MS = 200;
+function currentRepeatIntervalMs() {
+  return Number(selectRepeatInterval.value) || 100;
+}
+
 const DIR_DELTAS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
 
-const accelConfig = { timingThresholdMs: 200, countThreshold: 3, factor: 5, timeoutMs: 500 };
-function applyAccelConfigFromInputs() {
-  const timing = Number(inputAccelTiming.value);
-  const count = Number(inputAccelCount.value);
-  const factor = Number(inputAccelFactor.value);
-  const timeout = Number(inputAccelTimeout.value);
-  if (Number.isFinite(timing) && timing > 0) accelConfig.timingThresholdMs = timing;
-  if (Number.isInteger(count) && count > 0) accelConfig.countThreshold = count;
-  if (Number.isFinite(factor) && factor > 0) accelConfig.factor = factor;
-  if (Number.isFinite(timeout) && timeout > 0) accelConfig.timeoutMs = timeout;
-  // Reflect back the actually-applied values so a rejected/invalid entry
-  // never silently sits in a field looking applied when it wasn't.
-  inputAccelTiming.value = accelConfig.timingThresholdMs;
-  inputAccelCount.value = accelConfig.countThreshold;
-  inputAccelFactor.value = accelConfig.factor;
-  inputAccelTimeout.value = accelConfig.timeoutMs;
-}
-for (const input of [inputAccelTiming, inputAccelCount, inputAccelFactor, inputAccelTimeout]) {
-  input.addEventListener('keydown', (event) => {
-    if (event.key !== 'Enter') return;
-    event.preventDefault();
-    applyAccelConfigFromInputs();
-  });
-}
+// Exported for verify-repeat.mjs, which transcribes this exact shape against
+// a fake clock the same way verify-accel.mjs did for the old accelerator --
+// see that file's own comment for why a fake clock beats trusting live
+// keyboard timing for this kind of state machine.
+export function createRepeatController({ initialDelayMs, getIntervalMs, onTick, setTimer = setTimeout, clearTimer = clearTimeout, setInt = setInterval, clearInt = clearInterval }) {
+  const held = new Map(); // dir -> { phase: 'delay'|'repeating', timerId }
 
-let accelCount = 0;
-let accelActive = false;
-let lastPressAt = -Infinity;
-let accelWatchdog = null;
-
-function cancelAcceleration() {
-  if (accelWatchdog !== null) { clearTimeout(accelWatchdog); accelWatchdog = null; }
-  accelActive = false;
-  accelCount = 0;
-}
-
-function armAccelWatchdog() {
-  if (accelWatchdog !== null) clearTimeout(accelWatchdog);
-  accelWatchdog = setTimeout(() => {
-    accelWatchdog = null;
-    cancelAcceleration();
-    scheduleSend(); // no further press is coming -- redraw now so the grid reappears
-  }, accelConfig.timeoutMs);
-}
-
-// Returns the pixel distance this press should move by (1 normally,
-// accelConfig.factor once accelerated). Direction doesn't factor into this
-// at all -- see the § Cursor acceleration comment above.
-function onCursorKeyPress() {
-  const now = performance.now();
-
-  if (accelActive) {
-    lastPressAt = now;
-    armAccelWatchdog();
-    return accelConfig.factor;
+  function keyDown(dir) {
+    if (held.has(dir)) return; // ignore a duplicate/stray down while already held
+    onTick(dir); // move once immediately
+    const timerId = setTimer(() => {
+      onTick(dir); // first repeat lands exactly at initialDelayMs, not initialDelayMs+interval
+      const intervalId = setInt(() => onTick(dir), getIntervalMs());
+      held.set(dir, { phase: 'repeating', timerId: intervalId });
+    }, initialDelayMs);
+    held.set(dir, { phase: 'delay', timerId });
   }
 
-  const freshStart = (now - lastPressAt) >= accelConfig.timingThresholdMs;
-  accelCount = freshStart ? 1 : accelCount + 1;
-  lastPressAt = now;
-
-  if (accelCount >= accelConfig.countThreshold) {
-    accelActive = true;
-    armAccelWatchdog();
-    return accelConfig.factor;
+  function keyUp(dir) {
+    const entry = held.get(dir);
+    if (!entry) return;
+    if (entry.phase === 'delay') clearTimer(entry.timerId);
+    else clearInt(entry.timerId);
+    held.delete(dir);
   }
-  return 1;
+
+  function stopAll() {
+    for (const dir of [...held.keys()]) keyUp(dir);
+  }
+
+  return { keyDown, keyUp, stopAll, isHeld: (dir) => held.has(dir) };
 }
 
-function handleDirectionPress(dir) {
-  const distance = onCursorKeyPress();
-  const [dx, dy] = DIR_DELTAS[dir];
-  moveCursor(dx * distance, dy * distance);
+const repeat = createRepeatController({
+  initialDelayMs: REPEAT_INITIAL_DELAY_MS,
+  getIntervalMs: currentRepeatIntervalMs,
+  onTick: (dir) => {
+    const [dx, dy] = DIR_DELTAS[dir];
+    moveCursor(dx, dy);
+  },
+});
+
+// § Exclusivity gate — a repeat-triggering action (a direction, or the dot1
+// haptics trigger) only ever starts while it's the ONLY key/dot currently
+// held. This matters because real usage layers other combos on top of the
+// same keys/dots (panning, zooming, etc. all reuse cursor keys in
+// combination with other keys) -- without this, a combo's second key going
+// down mid-press would either get eaten as a spurious direction move, or a
+// direction repeat already running would fight with whatever the combo is
+// trying to do.
+//
+// The moment a second id goes down, any in-progress repeat is cancelled
+// immediately (onCancel), even though the first key is still physically
+// held. Deliberately does NOT auto-resume once back down to one held id --
+// resuming requires releasing everything and starting a fresh key-down, so
+// "let go of the modifier but keep holding the arrow" doesn't silently
+// restart cursoring mid-combo.
+//
+// Exported for verify-repeat.mjs, same transcription-testing approach as
+// createRepeatController above.
+export function createExclusiveGate({ onCancel }) {
+  const held = new Set();
+  function press(id, onSoloDown) {
+    if (held.has(id)) return; // already down (incl. OS keyboard auto-repeat) -- no-op
+    held.add(id);
+    if (held.size > 1) { onCancel(); return; }
+    onSoloDown && onSoloDown();
+  }
+  function release(id, onUp) {
+    if (!held.has(id)) return;
+    held.delete(id);
+    onUp && onUp();
+  }
+  return { press, release, size: () => held.size };
 }
+
+const exclusiveGate = createExclusiveGate({ onCancel: () => repeat.stopAll() });
+
+// Any held direction should stop if the page loses focus, rather than
+// leaving a phantom interval running with no way to release it (e.g. Alt+Tab
+// away while a physical dot is still mechanically held down).
+window.addEventListener('blur', () => repeat.stopAll());
 
 const KEY_TO_DIR = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
 
+// Every keydown/keyup on the page (not just direction keys) feeds the
+// exclusivity gate, using event.key as the id -- a Shift, Ctrl, or any other
+// key going down while an arrow is held cancels the arrow's repeat, the same
+// as a second arrow would. Ignored entirely while a form control is
+// focused, so editing the repeat-interval/haptics fields doesn't get read
+// as a "second key" against nothing.
 document.addEventListener('keydown', (event) => {
+  if (isFormControlFocused()) return;
   const dir = KEY_TO_DIR[event.key];
-  if (!dir || isFormControlFocused()) return;
-  event.preventDefault();
-  stats.keydowns++;
-  handleDirectionPress(dir);
+  if (dir) { event.preventDefault(); stats.keydowns++; renderStats(); }
+  exclusiveGate.press(event.key, dir ? () => repeat.keyDown(dir) : undefined);
 });
 
+document.addEventListener('keyup', (event) => {
+  if (isFormControlFocused()) return;
+  const dir = KEY_TO_DIR[event.key];
+  exclusiveGate.release(event.key, dir ? () => repeat.keyUp(dir) : undefined);
+});
+
+// ---- Haptics ----
+// requestVibrator is on/off-only -- there's no intensity parameter in the
+// protocol (see dotpad-toolkit/README.md's "Haptics" section). repeatCount
+// is silently clamped to 1-5 by the SDK regardless of what's requested;
+// onMs/offMs are truncated to 10ms resolution.
+function triggerTestHaptic() {
+  if (!currentDevice) return;
+  const onMs = Number(inputHapticOn.value) || 0;
+  const offMs = Number(inputHapticOff.value) || 0;
+  const repeatCount = Number(inputHapticRepeat.value) || 1;
+  sdk.requestVibrator(currentDevice, onMs, offMs, repeatCount);
+}
+btnTestHaptic.addEventListener('click', triggerTestHaptic);
+
 // ---- Dot Pad connection ----
+// Cursor dots and the haptics-trigger dot are driven entirely by
+// onKeyDown/onKeyUp now (real press/release), not the older onKey report --
+// see dotpad-toolkit/README.md's "Two ways to hear about a key press"
+// section for why these are separate channels with non-corresponding key
+// names, and dotPadKeyToDot for the decode.
+//
+// Dot/direction convention (matches CURSOR_DOT in dotpad-toolkit/device/keys.js):
+//   dot2=up, dot3=left, dot5=down, dot6=right, dot1=haptics test trigger, dot4=unused
+const DOT_TO_DIR = { 2: 'up', 3: 'left', 5: 'down', 6: 'right' };
+
 watchDotPad(sdk, DataCodes, {
   onConnected: (device) => {
     currentDevice = device;
@@ -379,8 +355,6 @@ watchDotPad(sdk, DataCodes, {
     displayH = dims.displayH;
     cursorX = Math.min(cursorX, displayW - 1);
     cursorY = Math.min(cursorY, displayH - 1);
-    prevCursorX = cursorX;
-    prevCursorY = cursorY;
     btnConnect.hidden = true;
     btnConnect.disabled = false;
     btnDisconnect.hidden = false;
@@ -389,6 +363,7 @@ watchDotPad(sdk, DataCodes, {
   },
   onDisconnected: () => {
     currentDevice = null;
+    repeat.stopAll();
     btnConnect.hidden = false;
     btnConnect.disabled = false;
     btnDisconnect.hidden = true;
@@ -398,14 +373,25 @@ watchDotPad(sdk, DataCodes, {
     setMessage('Connect failed');
     btnConnect.disabled = false;
   },
-  onKey: (device, keyCode, msg) => {
-    const byte6 = labelToByte6(msg || keyCode);
+  onKeyDown: (device, dotPadKey) => {
+    const dot = dotPadKeyToDot(dotPadKey);
+    if (!dot) return;
     stats.keydowns++;
-    if (byte6 === CURSOR_DOT.LEFT) handleDirectionPress('left');
-    else if (byte6 === CURSOR_DOT.RIGHT) handleDirectionPress('right');
-    else if (byte6 === CURSOR_DOT.UP) handleDirectionPress('up');
-    else if (byte6 === CURSOR_DOT.DOWN) handleDirectionPress('down');
-  }
+    renderStats();
+    const dir = DOT_TO_DIR[dot];
+    const action = dot === 1 ? () => triggerTestHaptic() : dir ? () => repeat.keyDown(dir) : undefined;
+    // Every physical dot (including dot4, otherwise unused here) feeds the
+    // same exclusivity gate as the keyboard path -- pressing any second dot
+    // while one is held cancels an in-progress cursor repeat, same reasoning
+    // as § Exclusivity gate above.
+    exclusiveGate.press(`dot:${dot}`, action);
+  },
+  onKeyUp: (device, dotPadKey) => {
+    const dot = dotPadKeyToDot(dotPadKey);
+    if (!dot) return;
+    const dir = DOT_TO_DIR[dot];
+    exclusiveGate.release(`dot:${dot}`, dir ? () => repeat.keyUp(dir) : undefined);
+  },
 });
 
 btnConnect.addEventListener('click', async () => {

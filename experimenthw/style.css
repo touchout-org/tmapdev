@@ -27,7 +27,7 @@ fieldset {
   display: none;
 }
 
-#accel-group label {
+#haptics-group label {
   display: inline-block;
   min-width: 22em;
 }
