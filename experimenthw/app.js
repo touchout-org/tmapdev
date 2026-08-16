@@ -269,12 +269,24 @@ const repeat = createRepeatController({
 // direction repeat already running would fight with whatever the combo is
 // trying to do.
 //
-// The moment a second id goes down, any in-progress repeat is cancelled
-// immediately (onCancel), even though the first key is still physically
-// held. Deliberately does NOT auto-resume once back down to one held id --
-// resuming requires releasing everything and starting a fresh key-down, so
-// "let go of the modifier but keep holding the arrow" doesn't silently
-// restart cursoring mid-combo.
+// The moment a second, different id goes down, any in-progress repeat is
+// cancelled immediately (onCancel), even though the first key is still
+// physically held. Deliberately does NOT auto-resume once back down to one
+// held id -- resuming requires releasing everything and starting a fresh
+// key-down, so "let go of the modifier but keep holding the arrow" doesn't
+// silently restart cursoring mid-combo.
+//
+// Deliberately does NOT rely on every key-down being paired with a matching
+// key-up to keep `held` accurate. Real BLE key-up reports can be dropped or
+// delayed (observed in practice after a haptics trigger, likely the
+// vibrator write briefly contending with the key-state notification) --
+// trusting key-up as the only way out of "held" means one dropped key-up
+// leaves a phantom entry that jams every future press, since held.size
+// would never drop back to 1. Instead, ANY new key-down (not just
+// a genuinely-concurrent one) clears whatever's currently held first --
+// self-healing the very next time *any* key is pressed, at the cost of that
+// one press being "eaten" to do the clearing rather than firing its own
+// action. That's an accepted tradeoff: the user just presses again.
 //
 // Exported for verify-repeat.mjs, same transcription-testing approach as
 // createRepeatController above.
@@ -282,8 +294,13 @@ export function createExclusiveGate({ onCancel }) {
   const held = new Set();
   function press(id, onSoloDown) {
     if (held.has(id)) return; // already down (incl. OS keyboard auto-repeat) -- no-op
+    const clearingStaleOrOtherState = held.size > 0;
+    if (clearingStaleOrOtherState) {
+      onCancel();
+      held.clear();
+    }
     held.add(id);
-    if (held.size > 1) { onCancel(); return; }
+    if (clearingStaleOrOtherState) return; // this press was eaten to clear prior state -- press again
     onSoloDown && onSoloDown();
   }
   function release(id, onUp) {

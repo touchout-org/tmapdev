@@ -159,8 +159,13 @@ function createExclusiveGate({ onCancel }) {
   const held = new Set();
   function press(id, onSoloDown) {
     if (held.has(id)) return;
+    const clearingStaleOrOtherState = held.size > 0;
+    if (clearingStaleOrOtherState) {
+      onCancel();
+      held.clear();
+    }
     held.add(id);
-    if (held.size > 1) { onCancel(); return; }
+    if (clearingStaleOrOtherState) return;
     onSoloDown && onSoloDown();
   }
   function release(id, onUp) {
@@ -215,6 +220,34 @@ function createExclusiveGate({ onCancel }) {
   gate.release('left', () => repeat.keyUp('left'));
   gate.press('left', () => repeat.keyDown('left')); // fresh key-down
   check('a fresh key-down after full release starts a new repeat', ticks.length, 2);
+}
+
+// ---- Case 9: a key-up that never arrives (dropped BLE report) must not
+// jam the gate forever -- this is the actual bug found on real hardware:
+// dot1's key-up occasionally never arrives after a haptics trigger, and the
+// old key-up-only cleanup left `dot:1` stuck in `held` permanently, so
+// held.size never dropped back to 1 and every later cursor press got
+// treated as "a second key is down" and silently swallowed.
+{
+  const clock = makeFakeClock();
+  const ticks = [];
+  const repeat = makeController(clock, 100, ticks);
+  const gate = createExclusiveGate({ onCancel: () => repeat.stopAll() });
+
+  gate.press('dot:1', () => {}); // dot1 haptics trigger fires
+  // ...its key-up never arrives -- 'dot:1' is now permanently stuck in
+  // `held` under the old design.
+
+  gate.press('dot:3', () => repeat.keyDown('left')); // first cursor press after the stuck key
+  check('the first press after a stuck key is eaten to clear it, not fired', ticks.length, 0);
+  gate.release('dot:3', () => repeat.keyUp('left')); // user releases and, as instructed, tries again
+
+  gate.press('dot:3', () => repeat.keyDown('left')); // press again, as the user is told to
+  check('a subsequent press of the same key fires normally once the stuck state is cleared', ticks.length, 1);
+
+  gate.release('dot:3', () => repeat.keyUp('left'));
+  clock.advance(1000);
+  check('and releases/repeats behave normally from here on', ticks.length, 1);
 }
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);
