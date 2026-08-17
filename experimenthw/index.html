@@ -30,6 +30,14 @@
   </select>
 </fieldset>
 
+<fieldset id="click-sound-group">
+  <legend>Cursor click sound</legend>
+  <p>A short click plays on every pixel of cursor movement (500&nbsp;Hz tone, 20ms long, 4ms linear ramps in and out) &mdash; plain browser audio, works with or without the Dot Pad connected.</p>
+  <label><input type="checkbox" id="chk-click-enabled" checked> Play click sound</label><br>
+  <label for="input-click-volume">Volume:</label>
+  <input type="range" id="input-click-volume" min="0" max="100" step="5" value="50">
+</fieldset>
+
 <fieldset id="haptics-group">
   <legend>Haptics</legend>
   <p>The Dot Pad's vibrator is on/off only &mdash; there is no intensity/amplitude parameter in the protocol, only pulse timing. <code>requestVibrator(onMs, offMs, repeatCount)</code>: <strong>on ms</strong> and <strong>off ms</strong> are each truncated to 10ms resolution by the device firmware; <strong>repeat count</strong> is silently clamped to 1&ndash;5 by the SDK no matter what's requested. Edit the fields and press "Test vibration" to feel a configuration, or press dot 1 on the Dot Pad itself &mdash; its key-down triggers the same test with the current settings.</p>

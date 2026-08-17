@@ -1,7 +1,9 @@
 // experimenthw — a minimal Dot Pad app for experimenting with SDK 3.0.1's
 // newer features: haptic feedback parameters, and real key-down/key-up
-// events for hold-to-repeat cursor movement. No map, no pan/zoom: a single
-// cursor ring on a fixed 60x40 tactile grid.
+// events for hold-to-repeat cursor movement. Also plays an optional audible
+// click (plain Web Audio, no hardware involved) on every pixel of cursor
+// movement -- see § Cursor click sound. No pan/zoom: a single cursor ring on
+// a fixed 60x40 tactile grid.
 //
 // The previous round of experiments here was about *how to write to the
 // display* under rapid cursoring without it getting confused/sluggish. That
@@ -64,10 +66,67 @@ const statPayloadSize = document.getElementById('stat-payload-size');
 const statGap = document.getElementById('stat-gap');
 const btnResetStats = document.getElementById('btn-reset-stats');
 const selectRepeatInterval = document.getElementById('select-repeat-interval');
+const chkClickEnabled = document.getElementById('chk-click-enabled');
+const inputClickVolume = document.getElementById('input-click-volume');
 const inputHapticOn = document.getElementById('input-haptic-on');
 const inputHapticOff = document.getElementById('input-haptic-off');
 const inputHapticRepeat = document.getElementById('input-haptic-repeat');
 const btnTestHaptic = document.getElementById('btn-test-haptic');
+
+// § Cursor click sound — plain Web Audio, entirely independent of the Dot
+// Pad connection (works with or without hardware). A 500Hz sine tone under
+// a trapezoidal gain envelope: 4ms linear ramp up, 12ms flat, 4ms linear
+// ramp down (20ms total) -- a "square window with linear ramps" per spec,
+// as opposed to e.g. a Hann window's curved taper the whole way through.
+const CLICK_FREQUENCY_HZ = 500;
+const CLICK_DURATION_S = 0.020;
+const CLICK_RAMP_S = 0.004;
+const CLICK_PEAK_GAIN = 0.3; // ceiling at 100% volume -- headroom against clipping, this is UI feedback, not an alarm
+
+let audioCtx = null;
+function getAudioContext() {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) return null; // no Web Audio support -- clicks just silently don't happen
+  if (!audioCtx) audioCtx = new AudioContextCtor();
+  return audioCtx;
+}
+
+// Browsers require a user gesture before audio can play. Call this from any
+// genuine user-initiated event handler (e.g. a button click) as early as
+// possible, so playCursorClick() below -- which may end up firing from a
+// timer-driven repeat tick, not a fresh gesture -- always has an
+// already-running context to schedule into.
+function warmUpAudioContext() {
+  const ctx = getAudioContext();
+  if (ctx && ctx.state === 'suspended') ctx.resume();
+}
+
+function playCursorClick() {
+  if (!chkClickEnabled.checked) return;
+  const volume = Number(inputClickVolume.value) / 100;
+  if (!(volume > 0)) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume();
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(CLICK_FREQUENCY_HZ, ctx.currentTime);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  const peak = CLICK_PEAK_GAIN * volume;
+  const t0 = ctx.currentTime;
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(peak, t0 + CLICK_RAMP_S);
+  gain.gain.setValueAtTime(peak, t0 + CLICK_DURATION_S - CLICK_RAMP_S);
+  gain.gain.linearRampToValueAtTime(0, t0 + CLICK_DURATION_S);
+
+  osc.start(t0);
+  osc.stop(t0 + CLICK_DURATION_S);
+  osc.addEventListener('ended', () => { osc.disconnect(); gain.disconnect(); });
+}
 
 // § Message display — mirrors to the Dot Pad's message line, single source
 // of truth for anything announced, same pattern as DotTMAP's setMessage
@@ -199,6 +258,7 @@ function moveCursor(dx, dy) {
   if (newX === cursorX && newY === cursorY) return;
   cursorX = newX;
   cursorY = newY;
+  playCursorClick();
   renderStats();
   scheduleSend();
 }
@@ -428,6 +488,7 @@ watchDotPad(sdk, DataCodes, {
 });
 
 btnConnect.addEventListener('click', async () => {
+  warmUpAudioContext(); // a real click handler is the reliable place to unlock audio -- see § Cursor click sound
   btnConnect.disabled = true;
   setMessage('Scanning…');
   try {
