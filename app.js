@@ -1078,12 +1078,40 @@ function showPreviousMessageChunk() {
 // order and the app's hotkey handler (isFormControlFocused(), below) only
 // defers to focus on an actual form control, so stealing focus here doesn't
 // interfere with map hotkeys.
+//
+// blur() and focus() landing in the same synchronous script tick, as they
+// did before, only proved that *our own* page-level focus/blur listeners
+// fired -- it says nothing about whether Chromium's own accessibility-tree
+// serializer (the thing that actually notifies NVDA via the OS's UI
+// Automation focus-changed event) saw two separate states. That serializer
+// runs on its own internal cycle, decoupled from synchronous DOM events; if
+// blur-then-focus both happen before it next runs, it may see focus end up
+// back on the exact node it started on and emit no OS-level notification at
+// all -- silently defeating the whole technique regardless of what our own
+// listeners observed. Deferring the refocus with setTimeout forces a real
+// macrotask boundary between the blur and the focus, so each becomes its
+// own observable state for that serializer to notify on. (requestAnimation
+// Frame was tried first for this instead of setTimeout, but rAF callbacks
+// are fully paused whenever the page isn't visible -- confirmed with a
+// direct test, zero rAF ticks in a full second on a backgrounded tab -- so
+// it can stall the refocus indefinitely if the window ever loses compositor
+// visibility, e.g. alt-tabbing away. setTimeout still fires, just throttled,
+// while hidden.) messageFocusToken drops a stale deferred focus if a newer
+// setMessage() call has already superseded it (also naturally coalesces
+// same-tick bursts to just the last message, which is what should be spoken
+// anyway).
+let messageFocusToken = 0;
 function setMessage(text, deviceDelayMs = 0) {
   lastMessageText = text;
   messageDisplay.textContent = text;
-  messageAnnouncer.blur();
   messageAnnouncer.setAttribute('aria-label', text);
-  messageAnnouncer.focus({ preventScroll: true });
+  messageAnnouncer.blur();
+  const focusToken = ++messageFocusToken;
+  setTimeout(() => {
+    if (focusToken === messageFocusToken) {
+      messageAnnouncer.focus({ preventScroll: true });
+    }
+  }, 0);
   rebuildMessageWindow(text);
   if (currentDevice) {
     if (deviceDelayMs > 0) {
