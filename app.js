@@ -5883,6 +5883,67 @@ function closeStreetListDialog() {
 
 btnStreetListClose.addEventListener('click', closeStreetListDialog);
 
+// § Universal cancel (issue #23) — the Dot Pad's all-6-dots chord used to
+// only work while the Street Abbreviation Key list was open (the one place
+// it was ever checked); every other dialog/menu had no Dot Pad cancel path
+// at all. One shared function now closes whatever's actually open, wired
+// unconditionally at the top of the Dot Pad key handler below rather than
+// nested inside a single dialog's own branch.
+//
+// Routes through each dialog/menu's own existing Cancel/Close button
+// (.click(), not a bare .close()) rather than a second copy of their
+// cleanup logic -- several clear pending request-scoped state alongside
+// closing (New Map, Location Too Far, Did You Mean, etc.), and reusing the
+// real button guarantees identical behavior instead of two copies that can
+// drift apart.
+//
+// Priority order: row-actions-menu is nested inside My Archives and must
+// close first if it's the thing actually open on top of it. At most one
+// <dialog> is ever showModal()'d at a time in this app -- every place that
+// opens a second one closes the first first -- so the dialogs don't need
+// their own internal priority. Main Menu / Map Menu are checked last: a
+// modal <dialog> being open already makes the rest of the page (including
+// these) inert per the HTML spec, so they can never be the thing actually
+// on top while a dialog is also open.
+const DIALOG_CANCEL_BUTTONS = [
+  [newMapDialog, btnNewMapCancel],
+  [poiTooFarDialog, btnPoiCancel],
+  [didYouMeanDialog, btnDidYouMeanCancel],
+  [customPoiDialog, btnCustomPoiCancel],
+  [editPinDialog, btnEditPinCancel],
+  [editMapDialog, btnEditMapClose],
+  [myArchivesDialog, btnMyArchivesDone],
+  [saveMapDialog, btnSaveMapCancel],
+  [deleteSavedMapDialog, btnDeleteSavedMapCancel],
+  [settingsDialog, btnSettingsDone],
+  [helpDialog, btnHelpClose],
+  [releaseNotesDialog, btnReleaseNotesClose],
+  [streetListDialog, btnStreetListClose],
+  [aboutDialog, btnAboutClose],
+];
+
+function cancelTopmostOverlay() {
+  if (!rowActionsMenu.hidden) {
+    closeRowActionsMenu({ focusTrigger: true });
+    return true;
+  }
+  for (const [dialog, cancelButton] of DIALOG_CANCEL_BUTTONS) {
+    if (dialog.open) {
+      cancelButton.click();
+      return true;
+    }
+  }
+  if (!mainMenu.hidden) {
+    closeMainMenu({ focusButton: true });
+    return true;
+  }
+  if (!newMenu.hidden) {
+    closeNewMenu({ focusButton: true });
+    return true;
+  }
+  return false;
+}
+
 // § Street Abbreviation Key — still needed as a fallback for the one close
 // path with no explicit call site to hook into: the native Escape key,
 // handled entirely by the browser's own built-in dialog-cancel behavior.
@@ -6496,14 +6557,21 @@ sdk.setCallBack(
   },
   (device, keyCode, msg) => {
     const byte6 = labelToByte6(msg || keyCode);
+    // § Universal cancel (issue #23) — dots 1+2+3+4+5+6 together close
+    // whatever's currently open, checked unconditionally before anything
+    // else below (including the Street Abbreviation Key's own combos, which
+    // used to be the only place this chord was ever checked). See
+    // cancelTopmostOverlay's own comment for the full reasoning.
+    if (byte6 === 0x3F) {
+      cancelTopmostOverlay();
+      return;
+    }
     // § Street Abbreviation Key — while the dialog is open, dots 4+5+6 / 1+2+3
     // page the list (reusing the message window's own combos -- see
-    // showNextStreetListPage/showPreviousStreetListPage) and dots 1+2+3+4+
-    // 5+6 close it; every other Dot Pad combo is suppressed, same reasoning
-    // as the keyboard guard above.
+    // showNextStreetListPage/showPreviousStreetListPage); every other Dot
+    // Pad combo is suppressed, same reasoning as the keyboard guard above.
     if (streetListDialog.open) {
-      if (byte6 === 0x3F) closeStreetListDialog();
-      else if (byte6 === 0x38) showNextStreetListPage();
+      if (byte6 === 0x38) showNextStreetListPage();
       else if (byte6 === 0x07) showPreviousStreetListPage();
       return;
     }
