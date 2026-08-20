@@ -63,6 +63,16 @@
   <button type="button" id="btn-reset-stats">Reset stats</button>
 </div>
 
+<fieldset id="ble-log-group">
+  <legend>Raw BLE key-notification log (diagnostic)</legend>
+  <p>Subscribes independently to the Dot Pad's raw notify characteristic, bypassing the SDK's own decoding entirely, and logs every single notification byte-for-byte with a timestamp &mdash; including ones the SDK's own key-state decoder would silently discard because it only reports <em>changes</em>. Intended for tracking down the occasional stuck press-and-hold (a dropped key-up notification): connect, start logging, hold a direction for several seconds, release, then download the log. Logging only runs while explicitly started below; it has no effect on normal app behavior either way.</p>
+  <button type="button" id="btn-ble-log-start">Start logging</button>
+  <button type="button" id="btn-ble-log-stop" disabled>Stop logging</button>
+  <button type="button" id="btn-ble-log-download" disabled>Download log</button>
+  <button type="button" id="btn-ble-log-clear">Clear log</button>
+  <p><span id="ble-log-status">Not logging.</span> <span id="ble-log-count">0 notifications captured.</span></p>
+</fieldset>
+
 <script type="module" src="app.js"></script>
 </body>
 </html>

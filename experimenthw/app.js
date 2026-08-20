@@ -72,6 +72,12 @@ const inputHapticOn = document.getElementById('input-haptic-on');
 const inputHapticOff = document.getElementById('input-haptic-off');
 const inputHapticRepeat = document.getElementById('input-haptic-repeat');
 const btnTestHaptic = document.getElementById('btn-test-haptic');
+const btnBleLogStart = document.getElementById('btn-ble-log-start');
+const btnBleLogStop = document.getElementById('btn-ble-log-stop');
+const btnBleLogDownload = document.getElementById('btn-ble-log-download');
+const btnBleLogClear = document.getElementById('btn-ble-log-clear');
+const bleLogStatus = document.getElementById('ble-log-status');
+const bleLogCount = document.getElementById('ble-log-count');
 
 // § Cursor click sound — plain Web Audio, entirely independent of the Dot
 // Pad connection (works with or without hardware). A 500Hz sine tone under
@@ -496,6 +502,117 @@ const DOT_TO_DIR = { 2: 'up', 3: 'left', 5: 'down', 6: 'right' };
 // combined-key channel.
 const CHORD_HOLD_MS = 30;
 
+// ---- Raw BLE key-notification logger (diagnostic) ----
+// Investigating the occasional (~5% observed) stuck press-and-hold: a
+// dropped key-up BLE notification. The SDK's own key-state decoder
+// (dotpad-toolkit/vendor/web-sdk-3.0.1/DotPadSDK-3.0.1.js's private #M/#v
+// bit-diff methods) only calls onKeyDown/onKeyUp on an actual bit
+// transition -- any notification that doesn't change the decoded state is
+// silently discarded before it ever reaches app code. If the Dot Pad's
+// firmware periodically re-sends the current (unchanged) key state while a
+// button stays physically held -- a common keep-alive pattern in BLE
+// peripherals -- that would already be arriving on the wire and getting
+// swallowed right there, meaning a real "still held" signal exists but
+// isn't exposed anywhere in the SDK's public API. There's no way to tell
+// from the source alone whether the firmware actually behaves this way (or
+// whether the ~5% loss is instead an actual dropped notification, gone
+// before it reaches either this code or the SDK's) -- this logger exists to
+// find out on real hardware.
+//
+// Subscribes independently to the Dot Pad's raw notify characteristic,
+// bypassing the SDK's decoder entirely, and logs every single notification
+// byte-for-byte with a timestamp. Also logs every onKeyDown/onKeyUp the SDK
+// itself reports on the same timeline, so a downloaded log lines up both
+// views and shows exactly which case a "stuck" hold falls into. Reaches the
+// raw BluetoothDevice via currentDevice.connectDevice -- a public getter on
+// the SDK's DotDevice wrapper (confirmed by reading the vendored source,
+// not documented anywhere) that returns the same BluetoothDevice the SDK
+// connected internally. Web Bluetooth characteristics support multiple
+// independent startNotifications() subscribers, so this coexists with the
+// SDK's own subscription without disturbing it -- purely observational,
+// never writes anything and has no effect on the app when not explicitly
+// started below.
+const DOTPAD_SERVICE_UUID = '49535343-fe7d-4ae5-8fa9-9fafd205e455';
+const DOTPAD_NOTIFY_CHARACTERISTIC_UUID = '49535343-1e4d-4bd9-ba61-23c647249616';
+
+let bleLogEntries = [];
+let bleLogging = false;
+let bleLogCharacteristic = null;
+let bleLogHandler = null;
+let bleLogStartedAt = null;
+
+function bleLogPush(entry) {
+  if (!bleLogging) return;
+  bleLogEntries.push({ tMs: Math.round(performance.now() - bleLogStartedAt), ...entry });
+  bleLogCount.textContent = `${bleLogEntries.length} notification${bleLogEntries.length === 1 ? '' : 's'} captured.`;
+  btnBleLogDownload.disabled = false;
+}
+
+function bytesToHex(dataView) {
+  let hex = '';
+  for (let i = 0; i < dataView.byteLength; i++) hex += dataView.getUint8(i).toString(16).padStart(2, '0');
+  return hex;
+}
+
+async function startBleLogging() {
+  if (!currentDevice || !currentDevice.connectDevice) {
+    bleLogStatus.textContent = 'Not connected -- connect the Dot Pad first.';
+    return;
+  }
+  try {
+    const service = await currentDevice.connectDevice.gatt.getPrimaryService(DOTPAD_SERVICE_UUID);
+    bleLogCharacteristic = await service.getCharacteristic(DOTPAD_NOTIFY_CHARACTERISTIC_UUID);
+    await bleLogCharacteristic.startNotifications();
+    bleLogHandler = (event) => bleLogPush({ type: 'raw', hex: bytesToHex(event.target.value) });
+    bleLogCharacteristic.addEventListener('characteristicvaluechanged', bleLogHandler);
+    bleLogStartedAt = performance.now();
+    bleLogging = true;
+    bleLogStatus.textContent = 'Logging…';
+    btnBleLogStart.disabled = true;
+    btnBleLogStop.disabled = false;
+  } catch (err) {
+    bleLogStatus.textContent = `Could not start logging: ${err.message}`;
+  }
+}
+
+function stopBleLogging() {
+  bleLogging = false;
+  if (bleLogCharacteristic && bleLogHandler) {
+    bleLogCharacteristic.removeEventListener('characteristicvaluechanged', bleLogHandler);
+  }
+  bleLogCharacteristic = null;
+  bleLogHandler = null;
+  bleLogStatus.textContent = 'Stopped.';
+  btnBleLogStart.disabled = false;
+  btnBleLogStop.disabled = true;
+}
+
+function downloadBleLog() {
+  const lines = bleLogEntries.map((e) => {
+    if (e.type === 'raw') return `${e.tMs}ms\tRAW\t\thex=${e.hex}`;
+    const kind = e.type === 'keyDown' ? 'SDK KeyDown' : 'SDK KeyUp';
+    return `${e.tMs}ms\t${kind}\tdotPadKey=${e.dotPadKey} dot=${e.dot ?? '(unmapped)'}`;
+  });
+  const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `dotpad-ble-log-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+btnBleLogStart.addEventListener('click', startBleLogging);
+btnBleLogStop.addEventListener('click', stopBleLogging);
+btnBleLogDownload.addEventListener('click', downloadBleLog);
+btnBleLogClear.addEventListener('click', () => {
+  bleLogEntries = [];
+  bleLogCount.textContent = '0 notifications captured.';
+  btnBleLogDownload.disabled = true;
+});
+
 watchDotPad(sdk, DataCodes, {
   onConnected: (device) => {
     currentDevice = device;
@@ -519,6 +636,7 @@ watchDotPad(sdk, DataCodes, {
     currentDevice = null;
     repeat.stopAll();
     exclusiveGate.cancelPending();
+    if (bleLogging) stopBleLogging(); // the raw subscription doesn't survive a GATT disconnect anyway
     btnConnect.hidden = false;
     btnConnect.disabled = false;
     btnDisconnect.hidden = true;
@@ -530,6 +648,7 @@ watchDotPad(sdk, DataCodes, {
   },
   onKeyDown: (device, dotPadKey) => {
     const dot = dotPadKeyToDot(dotPadKey);
+    bleLogPush({ type: 'keyDown', dotPadKey, dot }); // logged even when unmapped -- see § Raw BLE key-notification logger
     if (!dot) return;
     stats.keydowns++;
     renderStats();
@@ -546,6 +665,7 @@ watchDotPad(sdk, DataCodes, {
   },
   onKeyUp: (device, dotPadKey) => {
     const dot = dotPadKeyToDot(dotPadKey);
+    bleLogPush({ type: 'keyUp', dotPadKey, dot });
     if (!dot) return;
     const dir = DOT_TO_DIR[dot];
     exclusiveGate.release(`dot:${dot}`, dir ? () => repeat.keyUp(dir) : undefined);
