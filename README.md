@@ -45,15 +45,15 @@ The Dot Pad's message display can show 20 braille characters at a time, but mess
 * Whenever a new message is set, it's translated under the currently active braille code (see [Braille translator](#braille-translator)) and the **first** 20-cell-or-fewer chunk is shown automatically.
 * Dots 4+5+6 together show the next chunk; dots 1+2+3 together show the previous one.
 * Chunks break at word boundaries. If a single word is itself longer than 20 cells, that one chunk is hard-cut.
-* If there's no next/previous chunk (already at the last/first one), the edge tone plays (see [Sound cues](#sound-cues)) but nothing else changes — no message-field update, no device write, the display just keeps showing what it already had.
+* If there's no next/previous chunk (already at the last/first one), the end-of-range alert plays (see [Sound cues](#sound-cues)) but nothing else changes — no message-field update, no device write, the display just keeps showing what it already had.
 * Pagination is always computed against the *translated* cell sequence, never the raw source text, since the two can have very different lengths. When the Braille Translation setting changes (see [Settings](#settings)), the currently-displayed message is re-translated under the new code and re-paginated from its first chunk — chunk boundaries don't line up between codes (a contraction-heavy code and a plain one chunk the same text differently), so there's no meaningful "same position" to preserve across a code change.
 * There's no keyboard equivalent for paging — the on-screen/ARIA message is never truncated in the first place, so a keyboard/screen-reader user already has the complete message without needing to page through anything; the 20-cell limit is purely a physical-device constraint.
 
 ### Sound cues
 
-Alongside the message field, a short synthesized tone is a secondary, non-verbal cue for certain events — Edge of Map (see [Pan Behavior](#pan-behavior), a beep when a pan is rejected) and the message display's own edge (see [Virtual message window](#virtual-message-window) above, a beep when paging past the first/last chunk) share the same tone. Cues are short tones generated with the Web Audio API (an oscillator, no external library or audio file needed).
+Alongside the message field, a short synthesized tone plus a Dot Pad vibration pulse (200ms on, no off gap, one repeat) is a secondary, non-verbal **end-of-range alert**: "you've reached a limit and nothing further happened." One shared function covers every case rather than a one-off per feature: Edge of Map (see [Pan Behavior](#pan-behavior), a pan is rejected), the message display window and Visible Streets list both paging past their first/last chunk/page (see [Virtual message window](#virtual-message-window) above), and the scale ladder already being at its min/max preset (see [Scale behavior](#scale-behavior)). The tone is generated with the Web Audio API (an oscillator, no external library or audio file needed); the vibration is a no-op with no device connected, same as any other device-only call.
 
-This is meant as a general pattern, not a one-off for Edge of Map specifically: sound is a plausible secondary cue for a variety of future events (e.g., a save completing, an error, reaching a boundary of some other kind) where a quick non-verbal signal is useful alongside — never instead of — the message field, which remains the single source of truth for what actually happened. Specific additional cues aren't designed yet; this section exists so the pattern (and the "no external library needed" fact) doesn't need rediscovering each time one comes up.
+This is meant as a general pattern: any future "you tried to go further but there's nowhere left to go" case should reuse the same end-of-range alert rather than inventing its own cue.
 
 ## Screen Layout
 
@@ -191,6 +191,7 @@ The scale appears on the screen as a combo box showing the value of the current 
 
 * Scale values are always "X = Y," where X is the distance on the display and Y is the distance on the map. For example, "1 in = 300 ft" or "1 cm = 300 m." 
 * Whenever the scale is adjusted, the new scale appears on the message display.
+* Trying to go beyond the smallest/largest preset plays the end-of-range alert (see [Sound cues](#sound-cues)) instead of changing anything.
 
 ### Street importance tiers
 

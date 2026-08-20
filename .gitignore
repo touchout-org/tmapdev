@@ -5,3 +5,7 @@ firestore-debug.log
 ui-debug.log
 pubsub-debug.log
 database-debug.log
+
+# Informal draft spec snippets -- a scratch space for working out
+# requirements before they're ready to share, not meant to be committed.
+spec-scraps/

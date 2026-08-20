@@ -1015,15 +1015,15 @@ function sendCurrentMessageChunkToDevice() {
 
 // § Command / hotkey mapping — dots 4+5+6 together show the next chunk
 // of the current message; dots 1+2+3 together show the previous one. If
-// there's no next/previous chunk, the edge tone plays but the display
-// keeps showing whatever's already there -- no message-field change, no
-// device write, per tmap spec.md § Message display architecture.
+// there's no next/previous chunk, the end-of-range alert plays but the
+// display keeps showing whatever's already there -- no message-field
+// change, no device write, per README.md § Virtual message window.
 function showNextMessageChunk() {
   if (messageWindowChunkIndex + 1 < messageWindowChunkStarts.length) {
     messageWindowChunkIndex++;
     sendCurrentMessageChunkToDevice();
   } else {
-    playEdgeTone();
+    playEndOfRangeAlert();
   }
 }
 function showPreviousMessageChunk() {
@@ -1031,7 +1031,7 @@ function showPreviousMessageChunk() {
     messageWindowChunkIndex--;
     sendCurrentMessageChunkToDevice();
   } else {
-    playEdgeTone();
+    playEndOfRangeAlert();
   }
 }
 
@@ -1086,11 +1086,21 @@ function playTone(frequency, durationMs) {
   oscillator.stop(audioContext.currentTime + durationMs / 1000);
 }
 
-// Low, short "bump" tone for a boundary condition -- see tmap spec.md §
-// Sound cues. Shared by Edge of Map (panning past the fetched data) and
-// the message display window (paging past the first/last chunk).
-function playEdgeTone() {
+// § End-of-range alert — a short synthesized tone plus a Dot Pad vibration
+// pulse, the shared non-verbal cue for "you've reached a limit and nothing
+// further happened." Generalized from the original Edge-of-Map-only "edge
+// tone" (see spec-scraps/End-of-range.md) to also cover the message display
+// window and Visible Streets list (paging past the first/last chunk/page)
+// and the scale ladder (already at the min/max preset) -- see README.md §
+// Sound cues. Tone params are unchanged from the original edge tone;
+// vibration is fire-and-forget (silently no-ops with no device connected,
+// same as every other device-only call here) and doesn't delay the tone.
+const END_OF_RANGE_VIBRATE_ON_MS = 200;
+const END_OF_RANGE_VIBRATE_OFF_MS = 0;
+const END_OF_RANGE_VIBRATE_REPEAT = 1;
+function playEndOfRangeAlert() {
   playTone(220, 150);
+  if (currentDevice) sdk.requestVibrator(currentDevice, END_OF_RANGE_VIBRATE_ON_MS, END_OF_RANGE_VIBRATE_OFF_MS, END_OF_RANGE_VIBRATE_REPEAT);
 }
 
 // § Scale behavior — populate the combo box once from SCALE_PRESETS_FT.
@@ -1109,7 +1119,11 @@ scaleSelect.value = String(DEFAULT_SCALE_INDEX);
 function setScaleIndex(newIndex) {
   if (!lastBbox) return;
   newIndex = clamp(newIndex, 0, SCALE_PRESETS_FT.length - 1);
-  if (newIndex === scaleIndex) return;
+  if (newIndex === scaleIndex) {
+    // Already at the min/max preset -- end of the scale ladder.
+    playEndOfRangeAlert();
+    return;
+  }
   scaleIndex = newIndex;
   scaleSelect.value = String(scaleIndex);
   reclampViewportCenter();
@@ -5476,7 +5490,7 @@ function panMap(direction) {
 
   if (newLat === viewportCenterLat && newLon === viewportCenterLon) {
     setMessage('Edge of Map');
-    playEdgeTone();
+    playEndOfRangeAlert();
     return;
   }
 
@@ -5774,13 +5788,14 @@ function sendStreetListPageToDevice() {
 
 // § Command / hotkey mapping — dots 4+5+6 / 1+2+3 page the Visible Streets
 // list forward/back while it's open, reusing the exact same combos (and
-// edge-tone-on-no-more-pages behavior) as the message window's own paging.
+// end-of-range-alert-on-no-more-pages behavior) as the message window's own
+// paging.
 function showNextStreetListPage() {
   if (streetListPageIndex + 1 < streetListPages.length) {
     streetListPageIndex++;
     sendStreetListPageToDevice();
   } else {
-    playEdgeTone();
+    playEndOfRangeAlert();
   }
 }
 function showPreviousStreetListPage() {
@@ -5788,7 +5803,7 @@ function showPreviousStreetListPage() {
     streetListPageIndex--;
     sendStreetListPageToDevice();
   } else {
-    playEdgeTone();
+    playEndOfRangeAlert();
   }
 }
 
