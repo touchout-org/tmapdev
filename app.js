@@ -1120,8 +1120,11 @@ function setScaleIndex(newIndex) {
   if (!lastBbox) return;
   newIndex = clamp(newIndex, 0, SCALE_PRESETS_FT.length - 1);
   if (newIndex === scaleIndex) {
-    // Already at the min/max preset -- end of the scale ladder.
+    // Already at the min/max preset -- end of the scale ladder. Per issue
+    // #25, the current scale message is re-displayed (not left as whatever
+    // was on screen before), alongside the alert.
     playEndOfRangeAlert();
+    setMessage(formatScaleLabel(scaleIndex));
     return;
   }
   scaleIndex = newIndex;
