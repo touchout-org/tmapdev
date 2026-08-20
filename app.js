@@ -1122,9 +1122,17 @@ function setScaleIndex(newIndex) {
   if (newIndex === scaleIndex) {
     // Already at the min/max preset -- end of the scale ladder. Per issue
     // #25, the current scale message is re-displayed (not left as whatever
-    // was on screen before), alongside the alert.
-    playEndOfRangeAlert();
+    // was on screen before), alongside the alert. setMessage() first, alert
+    // second -- same order as Edge of Map's own message+alert pairing below,
+    // and deliberate: two BLE writes issued back-to-back contend on the
+    // device's single write characteristic (see dotpad-toolkit/README.md's
+    // "Message-line and graphics writes contend over BLE" -- the same class
+    // of issue CONNECT_MESSAGE_DELAY_MS exists for), and it's consistently
+    // the *second* write that gets clobbered. The scale message is the
+    // actually-informative one here; the vibration is a secondary cue, so it
+    // goes second.
     setMessage(formatScaleLabel(scaleIndex));
+    playEndOfRangeAlert();
     return;
   }
   scaleIndex = newIndex;
