@@ -492,20 +492,6 @@ th[aria-sort="descending"] .sort-header::after {
   font-size: 0.95rem;
 }
 
-/* message-announcer duplicates message-display's text for screen readers
-   only (see setMessage() in app.js, § Message display architecture) -- kept
-   out of the visual layout entirely, the standard visually-hidden-but-
-   focusable pattern (not display:none/visibility:hidden, which would also
-   hide it from the accessibility tree and block .focus()). */
-#message-announcer {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-}
-
 footer {
   margin-top: 2rem;
   display: flex;

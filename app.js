@@ -360,15 +360,15 @@ const btnNewMapCancel = document.getElementById('btn-new-map-cancel');
 const anchorHeading = document.getElementById('anchor-heading');
 const mapSvg = document.getElementById('map');
 const messageDisplay = document.getElementById('message-display');
-// message-announcer is a separate, visually-hidden element that mirrors
-// message-display's text for screen readers only -- see setMessage() below
-// (§ Forcing a hard speech interrupt) for why announcing has to happen on a
-// different element than the one shown on screen. It's role="button" (see
-// index.html) rather than a plain div: NVDA's focus handling for a
-// roleless/generic element is documented as unreliable (nvaccess/nvda#11820
-// et al.) -- a real ARIA widget role gets the strong "entered focus mode,
-// announce it" treatment a generic div doesn't reliably get.
-const messageAnnouncer = document.getElementById('message-announcer');
+// role="alert"/aria-live are set here in JS rather than baked into
+// index.html's static markup -- a role="alert" live region present in the
+// raw page markup gets announced by some screen readers (confirmed on
+// NVDA) as a bare, contentless "alert" purely because the region exists
+// at page load, before setMessage() ever writes real text into it. Adding
+// the attributes after the initial parse avoids that phantom announcement
+// entirely; every real setMessage() call still gets announced normally.
+messageDisplay.setAttribute('role', 'alert');
+messageDisplay.setAttribute('aria-live', 'assertive');
 const btnConnect = document.getElementById('btn-connect');
 const mainMenuButton = document.getElementById('main-menu-button');
 const mainMenu = document.getElementById('main-menu');
@@ -1040,78 +1040,18 @@ function showPreviousMessageChunk() {
 // The device copy is paginated into MESSAGE_WINDOW_SIZE-cell chunks (see the
 // virtual message window above) rather than truncated -- the on-screen/ARIA
 // side is never limited, only the physical device's own fixed-size display.
-//
-// § Forcing a hard speech interrupt — role="alert"/aria-live="assertive"
-// alone isn't enough: NVDA gives every assertive announcement the same
-// internal "next" priority, so several fired in quick succession (e.g.
-// holding '[' to zoom out) don't cancel each other -- they queue FIFO and
-// all get spoken in full, one after another. This is a confirmed, unresolved
-// NVDA limitation (nvaccess/nvda#6335), not something fixable by debouncing
-// the writes -- the AT's own priority queue is what's queuing them. There's
-// also no way to trigger NVDA's own stop-speech command from page JS: a
-// script-dispatched KeyboardEvent never reaches its low-level keyboard hook,
-// which only sees real hardware input.
-//
-// A focus change is the reliable alternative: screen readers unconditionally
-// cancel all current *and* queued speech (any priority) when focus moves,
-// then announce the newly-focused element -- a completely different code
-// path from the live-region priority queue above. The first attempt at this
-// focused message-display itself (the same element carrying role="alert"),
-// but that hit a second, separate NVDA behavior: NVDA deliberately
-// suppresses an alert/live-region announcement when the announcing element
-// is also the one gaining focus, to avoid double-speaking (nvaccess/nvda
-// #11299) -- so the interrupt-via-focus and the live-region role were
-// fighting each other on the same node. message-announcer (see index.html)
-// is a second, separate, visually-hidden element with no ARIA role or
-// aria-live of its own, used ONLY as a focus target -- its accessible name
-// comes from aria-label, set fresh on every call, which is announced on
-// focus for any element regardless of role and isn't entangled with any
-// live-region-suppression logic. message-display remains the visible,
-// plain on-screen text (no ARIA live semantics needed there anymore, since
-// announcing is message-announcer's job).
-//
-// message-announcer is usually still the focused element from the
-// *previous* setMessage() call (nothing else has taken focus in between) --
-// calling .focus() on an element that's already focused is a no-op, firing
-// no new focus event and thus no new interrupt. blur() first so every call
-// is a genuine transition, not a same-element repeat. It's never in the Tab
-// order and the app's hotkey handler (isFormControlFocused(), below) only
-// defers to focus on an actual form control, so stealing focus here doesn't
-// interfere with map hotkeys.
-//
-// blur() and focus() landing in the same synchronous script tick, as they
-// did before, only proved that *our own* page-level focus/blur listeners
-// fired -- it says nothing about whether Chromium's own accessibility-tree
-// serializer (the thing that actually notifies NVDA via the OS's UI
-// Automation focus-changed event) saw two separate states. That serializer
-// runs on its own internal cycle, decoupled from synchronous DOM events; if
-// blur-then-focus both happen before it next runs, it may see focus end up
-// back on the exact node it started on and emit no OS-level notification at
-// all -- silently defeating the whole technique regardless of what our own
-// listeners observed. Deferring the refocus with setTimeout forces a real
-// macrotask boundary between the blur and the focus, so each becomes its
-// own observable state for that serializer to notify on. (requestAnimation
-// Frame was tried first for this instead of setTimeout, but rAF callbacks
-// are fully paused whenever the page isn't visible -- confirmed with a
-// direct test, zero rAF ticks in a full second on a backgrounded tab -- so
-// it can stall the refocus indefinitely if the window ever loses compositor
-// visibility, e.g. alt-tabbing away. setTimeout still fires, just throttled,
-// while hidden.) messageFocusToken drops a stale deferred focus if a newer
-// setMessage() call has already superseded it (also naturally coalesces
-// same-tick bursts to just the last message, which is what should be spoken
-// anyway).
-let messageFocusToken = 0;
 function setMessage(text, deviceDelayMs = 0) {
   lastMessageText = text;
+  // § Message display architecture — the live region is cleared and forced
+  // to reflow before being repopulated. Screen readers (confirmed on NVDA)
+  // don't reliably treat a same-element textContent change as a fresh
+  // assertive announcement that interrupts whatever's still being spoken;
+  // clear-then-reflow-then-set is the standard technique for forcing that,
+  // rather than letting rapid successive messages queue up and play in
+  // full one after another.
+  messageDisplay.textContent = '';
+  void messageDisplay.offsetHeight;
   messageDisplay.textContent = text;
-  messageAnnouncer.setAttribute('aria-label', text);
-  messageAnnouncer.blur();
-  const focusToken = ++messageFocusToken;
-  setTimeout(() => {
-    if (focusToken === messageFocusToken) {
-      messageAnnouncer.focus({ preventScroll: true });
-    }
-  }, 0);
   rebuildMessageWindow(text);
   if (currentDevice) {
     if (deviceDelayMs > 0) {
