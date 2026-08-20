@@ -155,25 +155,39 @@ function makeController(clock, intervalMs, ticks) {
 }
 
 // Transcribed verbatim from app.js's createExclusiveGate.
-function createExclusiveGate({ onCancel }) {
+function createExclusiveGate({ onCancel, setTimer, clearTimer }) {
   const held = new Set();
-  function press(id, onSoloDown) {
+  let pending = null;
+  function clearPending() {
+    if (pending === null) return;
+    clearTimer(pending.timerId);
+    pending = null;
+  }
+  function press(id, onSoloDown, soloDelayMs = 0) {
     if (held.has(id)) return;
     const clearingStaleOrOtherState = held.size > 0;
     if (clearingStaleOrOtherState) {
+      clearPending();
       onCancel();
       held.clear();
     }
     held.add(id);
     if (clearingStaleOrOtherState) return;
-    onSoloDown && onSoloDown();
+    if (!onSoloDown) return;
+    if (soloDelayMs <= 0) { onSoloDown(); return; }
+    pending = { id, onSoloDown, timerId: setTimer(() => { pending = null; onSoloDown(); }, soloDelayMs) };
   }
   function release(id, onUp) {
     if (!held.has(id)) return;
     held.delete(id);
+    if (pending !== null && pending.id === id) {
+      const onSoloDown = pending.onSoloDown;
+      clearPending();
+      onSoloDown();
+    }
     onUp && onUp();
   }
-  return { press, release, size: () => held.size };
+  return { press, release, size: () => held.size, cancelPending: clearPending };
 }
 
 // ---- Case 6: a solo key-down starts the action; a second key-down while
@@ -248,6 +262,53 @@ function createExclusiveGate({ onCancel }) {
   gate.release('dot:3', () => repeat.keyUp('left'));
   clock.advance(1000);
   check('and releases/repeats behave normally from here on', ticks.length, 1);
+}
+
+// ---- Case 10: a solo press with soloDelayMs commits after the window
+// elapses, same net effect as an immediate press just later -- this is the
+// real dot-pad path (CHORD_HOLD_MS in app.js).
+{
+  const clock = makeFakeClock();
+  const ticks = [];
+  const repeat = makeController(clock, 100, ticks);
+  const gate = createExclusiveGate({ onCancel: () => repeat.stopAll(), setTimer: clock.setTimeout, clearTimer: clock.clearTimeout });
+  gate.press('dot:3', () => repeat.keyDown('left'), 30);
+  check('nothing fires yet -- still inside the hold-and-see window', ticks.length, 0);
+  clock.advance(29);
+  check('still nothing one tick before the window elapses', ticks.length, 0);
+  clock.advance(1);
+  check('commits at exactly the window', ticks.map((t) => t.at), [30]);
+}
+
+// ---- Case 11: a second dot joining within the window means the first
+// dot's solo action never fires at all -- not fired-then-cancelled, the
+// actual "chords must not trigger single-key behavior" requirement.
+{
+  const clock = makeFakeClock();
+  const ticks = [];
+  const repeat = makeController(clock, 100, ticks);
+  const gate = createExclusiveGate({ onCancel: () => repeat.stopAll(), setTimer: clock.setTimeout, clearTimer: clock.clearTimeout });
+  gate.press('dot:3', () => repeat.keyDown('left'), 30); // first dot of a chord
+  clock.advance(10);
+  gate.press('dot:2', () => repeat.keyDown('up'), 30); // second dot joins mid-window -- eaten to clear
+  clock.advance(1000);
+  check('neither chord dot ever triggered a single-key action', ticks.length, 0);
+}
+
+// ---- Case 12: releasing before the window elapses (a genuine quick tap)
+// commits immediately rather than waiting out the rest of the window or
+// being dropped -- a real tap must still register, and promptly.
+{
+  const clock = makeFakeClock();
+  const ticks = [];
+  const repeat = makeController(clock, 100, ticks);
+  const gate = createExclusiveGate({ onCancel: () => repeat.stopAll(), setTimer: clock.setTimeout, clearTimer: clock.clearTimeout });
+  gate.press('dot:3', () => repeat.keyDown('left'), 30);
+  clock.advance(10); // released well before the 30ms window would elapse
+  gate.release('dot:3', () => repeat.keyUp('left'));
+  check('a quick tap commits immediately on release, not delayed to t=30', ticks.map((t) => t.at), [10]);
+  clock.advance(1000);
+  check('and the just-committed repeat.keyDown was immediately paired with keyUp -- no lingering repeat', ticks.length, 1);
 }
 
 console.log(failures === 0 ? '\nAll checks passed.' : `\n${failures} check(s) FAILED.`);

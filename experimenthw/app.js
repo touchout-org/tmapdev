@@ -359,35 +359,88 @@ const repeat = createRepeatController({
 // one press being "eaten" to do the clearing rather than firing its own
 // action. That's an accepted tradeoff: the user just presses again.
 //
+// § Chord hold-and-see window (soloDelayMs) — a physical dot-pad chord (e.g.
+// dots 2+3 together for a pan/zoom command) is reported as two independent,
+// staggered onKeyDown events; dotpad-toolkit/device/keys.js's onKeyDown/
+// onKeyUp channel is a raw per-bit diff with zero debounce (that's what
+// makes it responsive enough for hold-to-repeat), so there is no way to know
+// at the very first dot's key-down whether a second one is about to follow.
+// Firing a solo action immediately on that first key-down -- the previous
+// behavior -- meant every chord that includes a cursor dot (2/3/5/6) leaked
+// one single-key action (a cursor move) before the second dot arrived and
+// cancelled the repeat, violating the "chords must not trigger single-key
+// behavior" requirement (dotpad-key-manager.md § Multi-key behavior). The
+// SDK's own older combined-key channel (onKey/KeyCodes, see keys.js and
+// dotpad-toolkit's README) already solves this natively, but only after a
+// fixed 200ms internal settle delay (confirmed by reading the vendored SDK
+// source) -- far too slow for tap/hold responsiveness. soloDelayMs is a
+// deliberately much smaller compromise (see CHORD_HOLD_MS below): press()
+// defers actually calling onSoloDown by that long, so a second dot arriving
+// within the window cancels it via the same clearingStaleOrOtherState path
+// below (never having fired at all, not fired-then-corrected). A genuine
+// solo tap isn't penalized the full window either -- release() commits the
+// pending action immediately if the key goes back up first, since a key-up
+// proves for certain no chord partner is coming. soloDelayMs defaults to 0
+// (fire immediately, the original behavior) for callers that don't need
+// this -- the keyboard path here has no such hardware-staggering concern.
+//
 // Exported for verify-repeat.mjs, same transcription-testing approach as
 // createRepeatController above.
-export function createExclusiveGate({ onCancel }) {
+export function createExclusiveGate({ onCancel, setTimer = setTimeout, clearTimer = clearTimeout }) {
   const held = new Set();
-  function press(id, onSoloDown) {
+  let pending = null; // { id, onSoloDown, timerId } while a solo commit is deferred, else null
+
+  function clearPending() {
+    if (pending === null) return;
+    clearTimer(pending.timerId);
+    pending = null;
+  }
+
+  function press(id, onSoloDown, soloDelayMs = 0) {
     if (held.has(id)) return; // already down (incl. OS keyboard auto-repeat) -- no-op
     const clearingStaleOrOtherState = held.size > 0;
     if (clearingStaleOrOtherState) {
+      clearPending(); // a still-pending solo commit must never fire -- this proves it was a chord
       onCancel();
       held.clear();
     }
     held.add(id);
     if (clearingStaleOrOtherState) return; // this press was eaten to clear prior state -- press again
-    onSoloDown && onSoloDown();
+    if (!onSoloDown) return;
+    if (soloDelayMs <= 0) { onSoloDown(); return; }
+    pending = { id, onSoloDown, timerId: setTimer(() => { pending = null; onSoloDown(); }, soloDelayMs) };
   }
+
   function release(id, onUp) {
     if (!held.has(id)) return;
     held.delete(id);
+    if (pending !== null && pending.id === id) {
+      // Released before the hold-and-see window elapsed -- we now know for
+      // certain no chord partner is coming, so commit right away rather than
+      // waiting out the rest of the window (a real solo tap should still
+      // register promptly) or dropping it silently (a real solo tap must
+      // still register at all).
+      const onSoloDown = pending.onSoloDown;
+      clearPending();
+      onSoloDown();
+    }
     onUp && onUp();
   }
-  return { press, release, size: () => held.size };
+
+  return { press, release, size: () => held.size, cancelPending: clearPending };
 }
 
 const exclusiveGate = createExclusiveGate({ onCancel: () => repeat.stopAll() });
 
 // Any held direction should stop if the page loses focus, rather than
 // leaving a phantom interval running with no way to release it (e.g. Alt+Tab
-// away while a physical dot is still mechanically held down).
-window.addEventListener('blur', () => repeat.stopAll());
+// away while a physical dot is still mechanically held down). Also drops any
+// solo action still waiting out its chord hold-and-see window, so it can't
+// fire later for a key that page-blur has already effectively let go of.
+window.addEventListener('blur', () => {
+  repeat.stopAll();
+  exclusiveGate.cancelPending();
+});
 
 const KEY_TO_DIR = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
 
@@ -435,6 +488,14 @@ btnTestHaptic.addEventListener('click', triggerTestHaptic);
 //   dot2=up, dot3=left, dot5=down, dot6=right, dot1=haptics test trigger, dot4=unused
 const DOT_TO_DIR = { 2: 'up', 3: 'left', 5: 'down', 6: 'right' };
 
+// § Chord hold-and-see window -- see createExclusiveGate's own comment above
+// for the full reasoning. 30ms: comfortably below anything a human notices
+// as latency on a single tap/hold, comfortably above the stagger between two
+// dots of an intentional chord press, and a small fraction of the vendored
+// SDK's own 200ms settle delay for its native (but too-slow-for-this)
+// combined-key channel.
+const CHORD_HOLD_MS = 30;
+
 watchDotPad(sdk, DataCodes, {
   onConnected: (device) => {
     currentDevice = device;
@@ -457,6 +518,7 @@ watchDotPad(sdk, DataCodes, {
   onDisconnected: () => {
     currentDevice = null;
     repeat.stopAll();
+    exclusiveGate.cancelPending();
     btnConnect.hidden = false;
     btnConnect.disabled = false;
     btnDisconnect.hidden = true;
@@ -476,8 +538,11 @@ watchDotPad(sdk, DataCodes, {
     // Every physical dot (including dot4, otherwise unused here) feeds the
     // same exclusivity gate as the keyboard path -- pressing any second dot
     // while one is held cancels an in-progress cursor repeat, same reasoning
-    // as § Exclusivity gate above.
-    exclusiveGate.press(`dot:${dot}`, action);
+    // as § Exclusivity gate above. CHORD_HOLD_MS (not passed for the
+    // keyboard path below, which has no hardware-staggering concern) is what
+    // stops a chord's first dot from leaking a single-key action before its
+    // second dot's report arrives -- see createExclusiveGate's own comment.
+    exclusiveGate.press(`dot:${dot}`, action, CHORD_HOLD_MS);
   },
   onKeyUp: (device, dotPadKey) => {
     const dot = dotPadKeyToDot(dotPadKey);
