@@ -363,7 +363,11 @@ const messageDisplay = document.getElementById('message-display');
 // message-announcer is a separate, visually-hidden element that mirrors
 // message-display's text for screen readers only -- see setMessage() below
 // (§ Forcing a hard speech interrupt) for why announcing has to happen on a
-// different element than the one shown on screen.
+// different element than the one shown on screen. It's role="button" (see
+// index.html) rather than a plain div: NVDA's focus handling for a
+// roleless/generic element is documented as unreliable (nvaccess/nvda#11820
+// et al.) -- a real ARIA widget role gets the strong "entered focus mode,
+// announce it" treatment a generic div doesn't reliably get.
 const messageAnnouncer = document.getElementById('message-announcer');
 const btnConnect = document.getElementById('btn-connect');
 const mainMenuButton = document.getElementById('main-menu-button');
