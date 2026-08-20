@@ -492,6 +492,13 @@ th[aria-sort="descending"] .sort-header::after {
   font-size: 0.95rem;
 }
 
+/* tabindex="-1": focused only programmatically (see setMessage() in app.js,
+   § Message display architecture) to force screen readers to hard-interrupt
+   speech, never reached via Tab -- no visible focus ring needed. */
+#message-display:focus {
+  outline: none;
+}
+
 footer {
   margin-top: 2rem;
   display: flex;

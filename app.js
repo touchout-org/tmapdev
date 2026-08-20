@@ -1041,33 +1041,43 @@ function showPreviousMessageChunk() {
 // virtual message window above) rather than truncated -- the on-screen/ARIA
 // side is never limited, only the physical device's own fixed-size display.
 //
-// § Rapid-message coalescing — role="alert"/aria-live="assertive" makes each
-// write interrupt normal-priority speech, but NVDA gives every assertive
-// announcement the same "next" priority, so several fired in quick succession
-// (e.g. holding '[' to zoom out repeatedly) don't cancel each other -- they
-// queue FIFO and all get spoken in full, one after another. There's no way to
-// force a harder interrupt (like NVDA's own Ctrl stop-speech command) from
-// page JS: a script-dispatched KeyboardEvent never reaches NVDA's low-level
-// keyboard hook, which only sees real hardware input. So instead the calls
-// themselves are coalesced: the first setMessage() in a burst still announces
-// immediately (a real assertive interrupt), but any further calls arriving
-// within MESSAGE_COALESCE_MS replace the pending one rather than queuing
-// behind it, so only the most recent message in a fast burst is ever spoken.
-const MESSAGE_COALESCE_MS = 150;
-let lastMessageApplyTime = -Infinity;
-let pendingMessageTimeout = null;
-let pendingMessageArgs = null;
-
-function applyMessageNow(text, deviceDelayMs) {
-  lastMessageApplyTime = performance.now();
+// § Forcing a hard speech interrupt — role="alert"/aria-live="assertive"
+// alone isn't enough: NVDA gives every assertive announcement the same
+// internal "next" priority, so several fired in quick succession (e.g.
+// holding '[' to zoom out) don't cancel each other -- they queue FIFO and
+// all get spoken in full, one after another. This is a confirmed, unresolved
+// NVDA limitation (nvaccess/nvda#6335), not something fixable by debouncing
+// the writes -- the AT's own priority queue is what's queuing them. There's
+// also no way to trigger NVDA's own stop-speech command from page JS: a
+// script-dispatched KeyboardEvent never reaches its low-level keyboard hook,
+// which only sees real hardware input.
+//
+// The reliable technique is a focus change, not a live-region mutation: a
+// screen reader unconditionally cancels all current *and* queued speech
+// (any priority) when focus moves, then announces the newly-focused
+// element -- a completely different code path from the live-region
+// priority queue above. message-display has tabindex="-1" for exactly this
+// (see index.html); calling .focus() on it after the text is set forces the
+// interrupt every single call, no queuing possible. It's never in the Tab
+// order and the app's hotkey handler (isFormControlFocused(), below) only
+// defers to focus on an actual form control, so stealing focus here doesn't
+// interfere with map hotkeys.
+//
+// message-display is usually still the focused element from the *previous*
+// setMessage() call (nothing else has taken focus in between) -- calling
+// .focus() on an element that's already focused is a no-op, firing no new
+// focus event and thus no new interrupt. blur() first so every call is a
+// genuine transition into message-display, not a same-element repeat.
+function setMessage(text, deviceDelayMs = 0) {
   lastMessageText = text;
-  // The live region is cleared and forced to reflow before being
-  // repopulated. Screen readers (confirmed on NVDA) don't reliably treat a
-  // same-element textContent change as a fresh assertive announcement;
-  // clear-then-reflow-then-set is the standard technique for forcing that.
+  // The live region is still cleared and reflowed before being repopulated,
+  // as a second, independent mutation-based announcement for ATs (e.g.
+  // VoiceOver) that don't share NVDA's same-priority queuing bug.
   messageDisplay.textContent = '';
   void messageDisplay.offsetHeight;
   messageDisplay.textContent = text;
+  messageDisplay.blur();
+  messageDisplay.focus({ preventScroll: true });
   rebuildMessageWindow(text);
   if (currentDevice) {
     if (deviceDelayMs > 0) {
@@ -1076,26 +1086,6 @@ function applyMessageNow(text, deviceDelayMs) {
       sendCurrentMessageChunkToDevice();
     }
   }
-}
-
-function setMessage(text, deviceDelayMs = 0) {
-  const elapsed = performance.now() - lastMessageApplyTime;
-  if (elapsed >= MESSAGE_COALESCE_MS) {
-    if (pendingMessageTimeout) {
-      clearTimeout(pendingMessageTimeout);
-      pendingMessageTimeout = null;
-    }
-    applyMessageNow(text, deviceDelayMs);
-    return;
-  }
-  // Still inside the cooldown from the last applied message -- replace
-  // whatever's pending instead of scheduling another one behind it.
-  pendingMessageArgs = { text, deviceDelayMs };
-  if (pendingMessageTimeout) return;
-  pendingMessageTimeout = setTimeout(() => {
-    pendingMessageTimeout = null;
-    applyMessageNow(pendingMessageArgs.text, pendingMessageArgs.deviceDelayMs);
-  }, MESSAGE_COALESCE_MS - elapsed);
 }
 
 // § Sound cues — secondary, non-verbal feedback alongside the message
