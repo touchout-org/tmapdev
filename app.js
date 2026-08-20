@@ -1040,15 +1040,31 @@ function showPreviousMessageChunk() {
 // The device copy is paginated into MESSAGE_WINDOW_SIZE-cell chunks (see the
 // virtual message window above) rather than truncated -- the on-screen/ARIA
 // side is never limited, only the physical device's own fixed-size display.
-function setMessage(text, deviceDelayMs = 0) {
+//
+// § Rapid-message coalescing — role="alert"/aria-live="assertive" makes each
+// write interrupt normal-priority speech, but NVDA gives every assertive
+// announcement the same "next" priority, so several fired in quick succession
+// (e.g. holding '[' to zoom out repeatedly) don't cancel each other -- they
+// queue FIFO and all get spoken in full, one after another. There's no way to
+// force a harder interrupt (like NVDA's own Ctrl stop-speech command) from
+// page JS: a script-dispatched KeyboardEvent never reaches NVDA's low-level
+// keyboard hook, which only sees real hardware input. So instead the calls
+// themselves are coalesced: the first setMessage() in a burst still announces
+// immediately (a real assertive interrupt), but any further calls arriving
+// within MESSAGE_COALESCE_MS replace the pending one rather than queuing
+// behind it, so only the most recent message in a fast burst is ever spoken.
+const MESSAGE_COALESCE_MS = 150;
+let lastMessageApplyTime = -Infinity;
+let pendingMessageTimeout = null;
+let pendingMessageArgs = null;
+
+function applyMessageNow(text, deviceDelayMs) {
+  lastMessageApplyTime = performance.now();
   lastMessageText = text;
-  // § Message display architecture — the live region is cleared and forced
-  // to reflow before being repopulated. Screen readers (confirmed on NVDA)
-  // don't reliably treat a same-element textContent change as a fresh
-  // assertive announcement that interrupts whatever's still being spoken;
-  // clear-then-reflow-then-set is the standard technique for forcing that,
-  // rather than letting rapid successive messages queue up and play in
-  // full one after another.
+  // The live region is cleared and forced to reflow before being
+  // repopulated. Screen readers (confirmed on NVDA) don't reliably treat a
+  // same-element textContent change as a fresh assertive announcement;
+  // clear-then-reflow-then-set is the standard technique for forcing that.
   messageDisplay.textContent = '';
   void messageDisplay.offsetHeight;
   messageDisplay.textContent = text;
@@ -1060,6 +1076,26 @@ function setMessage(text, deviceDelayMs = 0) {
       sendCurrentMessageChunkToDevice();
     }
   }
+}
+
+function setMessage(text, deviceDelayMs = 0) {
+  const elapsed = performance.now() - lastMessageApplyTime;
+  if (elapsed >= MESSAGE_COALESCE_MS) {
+    if (pendingMessageTimeout) {
+      clearTimeout(pendingMessageTimeout);
+      pendingMessageTimeout = null;
+    }
+    applyMessageNow(text, deviceDelayMs);
+    return;
+  }
+  // Still inside the cooldown from the last applied message -- replace
+  // whatever's pending instead of scheduling another one behind it.
+  pendingMessageArgs = { text, deviceDelayMs };
+  if (pendingMessageTimeout) return;
+  pendingMessageTimeout = setTimeout(() => {
+    pendingMessageTimeout = null;
+    applyMessageNow(pendingMessageArgs.text, pendingMessageArgs.deviceDelayMs);
+  }, MESSAGE_COALESCE_MS - elapsed);
 }
 
 // § Sound cues — secondary, non-verbal feedback alongside the message
